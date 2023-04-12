@@ -1,0 +1,101 @@
+---
+title: "Outplanting- site map"
+author: "Alex Macadam"
+date: "2023-04-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(raster)
+library(tidyverse)
+library(ggspatial)
+library(sf)
+library(dataaimsr)
+library(gisaimsr)
+library(ggrepel)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)
+library(cowplot)
+```
+
+```{r}
+gbr_feat<- gbr_feat
+```
+
+```{r}
+coordinates <- read.csv("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/coordinates.csv")
+coordinates<- coordinates %>% mutate(Reef = factor(Reef, levels=c("Wood","Martin","Arlington","Davies","Palm Is.")))
+```
+
+```{r}
+# Small Map of Australia
+sf_use_s2(FALSE) #We don't want to use a spherical geometry for now
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+AUS <- world %>% 
+  filter(name_long == "Australia") 
+
+map_aus <- ggplot(data = AUS) +
+  geom_sf(size = 0.1, fill = "#333333") +
+  coord_sf(expand = F, xlim = c(112,154), ylim = c(-45,-10)) +
+  geom_rect(aes(xmin=142, xmax=153, ymin=-25, ymax=-10),fill="transparent", linetype = "dotted", color="firebrick") +
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        panel.background = element_rect(fill = "transparent"),
+        panel.grid = element_blank(),
+        panel.border= element_blank(),
+        axis.text.x= element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank())
+
+map_aus
+```
+
+```{r}
+cols = c("#f9844a","#f9c74f","#43aa8b","#277da1","#4A3FAB") 
+```
+
+```{r}
+# first define box
+cropbox <- extent(142, 152, -22, -10) %>%
+  as("SpatialPolygons") %>%
+  st_as_sf %>%
+  st_set_crs(st_crs(gbr_feat))
+```
+
+```{r}
+site_map<- gbr_feat %>%
+  st_make_valid %>%
+  st_intersection(cropbox) %>%
+  ggplot(data = .) +
+    geom_sf(lwd = 0.01, fill = "grey") +
+    annotation_scale(location = "tr", width_hint = 0.5) +
+    annotation_north_arrow(location = "tr", which_north = "true", pad_x = unit(0.25, "in"), pad_y = unit(0.25, "in"), style = north_arrow_fancy_orienteering) +
+    labs(x = "Longitude", y = "Latitude") +
+    geom_label_repel(data = coordinates, mapping = aes(x = Long, y = Lat, label = Reef, fill = Reef), hjust = 0, vjust = 0, show.legend = FALSE) +
+    geom_point(data = coordinates, mapping = aes(x = Long, y = Lat, fill = Reef), shape = 21, size = 4, show.legend = FALSE) +
+    scale_fill_manual(values = cols)+
+    scale_colour_manual(values = cols) +
+    #theme(panel.background = element_rect(fill = "white", colour = "white", size = 0.5, linetype = "solid")) +
+    theme_classic()
+site_map
+```
+
+```{r}
+site_map2<- site_map + annotation_custom(ggplotGrob(map_aus), xmin = 141.5, xmax = 145.5, 
+                       ymin = -22, ymax = -19)
+site_map2
+```
+
+```{r}
+ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 2- Physiology/Chapter 2 figures/First draft figures/Site_map.pdf', site_map2,
+       device="pdf", width=5, height=6, units = "in")
+ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 2- Physiology/Chapter 2 figures/First draft figures/Site_map.png', site_map2,
+       device="png", width=5, height=6, units = "in", dpi = 1000)
+```
