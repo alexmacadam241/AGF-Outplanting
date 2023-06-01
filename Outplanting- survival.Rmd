@@ -97,12 +97,12 @@ glimpse(surv_data)
 #change columns to factors
 surv_data <- surv_data %>% mutate(Cross2=factor(Cross2),
                                   RegionCross=factor(RegionCross),
-                                  Breed=factor(Breed))
+                                  Breed=factor(Breed)) %>%
+  filter(Notes != "remove") #filter data of plugs with no juveniles
 ```
 
 ```{r}
 surv_summ<- surv_data %>% 
-  filter(Notes != "remove") %>% #filter data of plugs with no juveniles
   select(Cross2, RegionCross, Breed, SurvivalPerc) %>% #select columns of interest
   summarySE(measurevar="SurvivalPerc", groupvars=c("Breed","Cross2","RegionCross"), na.rm=TRUE) #create sumamry data for each Region Cross
 ```
@@ -129,5 +129,304 @@ surv_summ %>%
         legend.box.margin=margin(0,0,0,0),
         plot.margin = margin(rep(0.5,4)))+
   theme_pubr(base_size = 10)
+```
+
+```{r}
+#plot survival at end
+surv_summ %>% 
+  ggplot(aes(x=RegionCross, y=mean, color=RegionCross, group=RegionCross))+
+  geom_hline(yintercept=filter(surv_summ, RegionCross=="PIxPI")$mean, color='gray', lty='dashed')+
+  #geom_hline(yintercept=0, color='gray')+
+  geom_pointrange(aes(ymin=mean-se, ymax=mean+se, color=RegionCross), position=position_dodge(width=0.8))+
+  geom_text(aes(label=Newlabel, y=100, color=RegionCross), size=3, angle=90, position=position_dodge(width=0.8), vjust=0.5, hjust=1)+
+  scale_y_continuous(limits=c(0,100), breaks=seq(0,100,20))+
+  scale_color_manual(values=c('black', 'gray50', 'goldenrod2', 'firebrick4'), name="", guide=FALSE)+
+  scale_shape_manual(values=c(20, 18), name="", guide=FALSE)+
+  labs(x='Region', y="Survival after 95 days (%)")+
+  theme(legend.key.height = unit(0.3, "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,0,0),
+        plot.margin = margin(rep(0.5,4)))+
+  theme_pubr(base_size = 10)
+```
+
+MCMCglmm
+```{r}
+# Load required packages
+library(MCMCglmm)
+library(ggplot2)
+```
+
+```{r}
+# Set up the model formula
+formula <- cbind(RecruitsEnd, RecruitsDead) ~ RegionCross + (1 | DeviceNo)
+```
+
+```{r}
+# Set up the prior distributions
+prior <- list(R = list(V = 1, nu = 0.002),
+              G = list(G1 = list(V = 1, nu = 0.002)))
+```
+
+```{r}
+# Run the MCMCglmm model
+model <- MCMCglmm(c(RecruitsStart,RecruitsEnd) ~ RegionCross,
+                  random = ~DeviceNo,
+                  data = surv_data,
+                  family = "multinomial",
+                  prior = prior, 
+                  nitt = 50000, 
+                  burnin = 10000, 
+                  thin = 10, 
+                  verbose = FALSE)
+
+# Print the summary of the model results
+summary(model)
+```
+
+```{r}
+model <- MCMCglmm(LetVerb ~ -1 + trait + trait:(Channel + CrSem + MS), 
+random = ~us(trait):Vinf, 
+rcov = ~ us(trait):units, 
+data = letting, 
+family = "categorical", 
+prior = prior, 
+verbose = TRUE, 
+burnin = 10000, 
+nitt = 50000, 
+thin = 50)
+```
+
+```{r}
+# Plot the posterior distributions of the model parameters
+plot(model)
+```
+
+```{r}
+# Calculate the posterior means and standard deviations of the fixed effects
+post_means <- colMeans(model$Sol[, 1:10])
+post_sd <- apply(model$Sol[, 1:10], 2, sd)
+```
+
+```{r}
+# Plot the posterior means and credible intervals for each location
+ggplot(data = data, aes(x = location, y = post_means, ymin = post_means - 2 * post_sd, 
+                        ymax = post_means + 2 * post_sd)) +
+  geom_pointrange() +
+  labs(title = "Posterior Means and CIs for Survival Across Locations",
+       x = "Location", y = "Posterior Mean") +
+  theme_bw()
+```
+
+#############
+```{r}
+library(brms)
+library(posterior) # tools for working with posterior and prior distributions
+library(R2jags) # run Jags from within R
+library(lme4) # fit GLMM in frequentist framework
+```
+
+```{r}
+dat <- data.frame(alive = 19, total = 57)
+dat
+```
+
+```{r}
+mle <- glm(cbind(alive, total - alive) ~ 1,
+family = binomial("logit"), # family = binomial("identity") would be more straightforward
+data = dat)
+```
+
+```{r}
+coef(mle) # logit scale
+
+## (Intercept)
+## -0.6931472
+```
+
+```{r}
+plogis(coef(mle))
+
+## (Intercept)
+## 0.3333333
+```
+
+```{r}
+# model
+betabin <- function(){
+alive ~ dbin(survival, total) # binomial likelihood
+logit(survival) <- beta # logit link
+beta ~ dnorm(0, 1/1.5) # prior
+}
+# data
+datax <- list(total = 57,
+alive = 19)
+# initial values
+inits <- function() list(beta = rnorm(1, 0, sd = 1.5))
+# parameter to monitor
+params <- c("survival")
+# run jags
+bayes.jags <- jags(data = datax,
+inits = inits,
+parameters.to.save = params,
+model.file = betabin,
+n.chains = 2,
+n.iter = 5000,
+n.burnin = 1000,
+n.thin = 1)
+
+## Compiling model graph
+## Resolving undeclared variables
+## Allocating nodes
+## Graph information:
+## Observed stochastic nodes: 1
+## Unobserved stochastic nodes: 1
+## Total graph size: 8
+##
+## Initializing model
+
+# display results
+bayes.jags
+
+## Inference for Bugs model at "/var/folders/r7/j0wqj1k95vz8w44sdxzm986c0000gn/T//RtmpP7MZ1A/modela81d72dd23e2.txt", fit using jags,
+## 2 chains, each with 5000 iterations (first 1000 discarded)
+## n.sims = 8000 iterations saved
+## mu.vect sd.vect 2.5% 25% 50% 75% 97.5% Rhat n.eff
+## survival 0.342 0.061 0.228 0.300 0.341 0.382 0.466 1.001 2600
+## deviance 5.354 1.390 4.388 4.486 4.819 5.662 9.333 1.001 8000
+##
+## For each parameter, n.eff is a crude measure of effective sample size,
+## and Rhat is the potential scale reduction factor (at convergence, Rhat=1).
+##
+## DIC info (using the rule, pD = var(deviance)/2)
+## pD = 1.0 and DIC = 6.3
+## DIC is an estimate of expected predictive error (lower deviance is better).
+```
+
+```{r}
+bayes.brms <- brm(alive | trials(total) ~ 1,
+family = binomial("logit"), # binomial("identity") would be more straightforward
+data = dat,
+chains = 2, # nb of chains
+iter = 5000, # nb of iterations, including burnin
+warmup = 1000, # burnin
+thin = 1) # thinning
+
+## Running /Library/Frameworks/R.framework/Resources/bin/R CMD SHLIB foo.c
+## clang -mmacosx-version-min=10.13 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/Rcpp/include/" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/unsupported" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/BH/include" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/StanHeaders/include/src/" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/StanHeaders/include/" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppParallel/include/" -I"/Library/Frameworks/R.framework/Versions/4.1/Resources/library/rstan/include" -DEIGEN_NO_DEBUG -DBOOST_DISABLE_ASSERTS -DBOOST_PENDING_INTEGER_LOG2_HPP -DSTAN_THREADS -DBOOST_NO_AUTO_PTR -include '/Library/Frameworks/R.framework/Versions/4.1/Resources/library/StanHeaders/include/stan/math/prim/mat/fun/Eigen.hpp' -D_REENTRANT -DRCPP_PARALLEL_USE_TBB=1 -I/usr/local/include -fPIC -Wall -g -O2 -c foo.c -o foo.o
+## In file included from <built-in>:1:
+## In file included from /Library/Frameworks/R.framework/Versions/4.1/Resources/library/StanHeaders/include/stan/math/prim/mat/fun/Eigen.hpp:13:
+## In file included from /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/Dense:1:
+## In file included from /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/Core:88:
+## /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/src/Core/util/Macros.h:628:1: error: unknown type name 'namespace'
+## namespace Eigen {
+## ^
+## /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/src/Core/util/Macros.h:628:16: error: expected ';' after top level declarator
+## namespace Eigen {
+## ^
+## ;
+## In file included from <built-in>:1:
+## In file included from /Library/Frameworks/R.framework/Versions/4.1/Resources/library/StanHeaders/include/stan/math/prim/mat/fun/Eigen.hpp:13:
+## In file included from /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/Dense:1:
+## /Library/Frameworks/R.framework/Versions/4.1/Resources/library/RcppEigen/include/Eigen/Core:96:10: fatal error: 'complex' file not found
+## #include <complex>
+## ^~~~~~~~~
+## 3 errors generated.
+## make: *** [foo.o] Error 1
+##
+## SAMPLING FOR MODEL '782790eabbd10296f779d85fa03cf1e5' NOW (CHAIN 1).
+## Chain 1:
+## Chain 1: Gradient evaluation took 2e-05 seconds
+## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 0.2 seconds.
+## Chain 1: Adjust your expectations accordingly!
+## Chain 1:
+## Chain 1:
+## Chain 1: Iteration: 1 / 5000 [ 0%] (Warmup)
+## Chain 1: Iteration: 500 / 5000 [ 10%] (Warmup)
+## Chain 1: Iteration: 1000 / 5000 [ 20%] (Warmup)
+## Chain 1: Iteration: 1001 / 5000 [ 20%] (Sampling)
+## Chain 1: Iteration: 1500 / 5000 [ 30%] (Sampling)
+## Chain 1: Iteration: 2000 / 5000 [ 40%] (Sampling)
+## Chain 1: Iteration: 2500 / 5000 [ 50%] (Sampling)
+## Chain 1: Iteration: 3000 / 5000 [ 60%] (Sampling)
+## Chain 1: Iteration: 3500 / 5000 [ 70%] (Sampling)
+## Chain 1: Iteration: 4000 / 5000 [ 80%] (Sampling)
+## Chain 1: Iteration: 4500 / 5000 [ 90%] (Sampling)
+## Chain 1: Iteration: 5000 / 5000 [100%] (Sampling)
+## Chain 1:
+## Chain 1: Elapsed Time: 0.010358 seconds (Warm-up)
+## Chain 1: 0.046464 seconds (Sampling)
+## Chain 1: 0.056822 seconds (Total)
+## Chain 1:
+##
+## SAMPLING FOR MODEL '782790eabbd10296f779d85fa03cf1e5' NOW (CHAIN 2).
+## Chain 2:
+## Chain 2: Gradient evaluation took 1.3e-05 seconds
+## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 0.13 seconds.
+## Chain 2: Adjust your expectations accordingly!
+## Chain 2:
+## Chain 2:
+## Chain 2: Iteration: 1 / 5000 [ 0%] (Warmup)
+## Chain 2: Iteration: 500 / 5000 [ 10%] (Warmup)
+## Chain 2: Iteration: 1000 / 5000 [ 20%] (Warmup)
+## Chain 2: Iteration: 1001 / 5000 [ 20%] (Sampling)
+## Chain 2: Iteration: 1500 / 5000 [ 30%] (Sampling)
+## Chain 2: Iteration: 2000 / 5000 [ 40%] (Sampling)
+## Chain 2: Iteration: 2500 / 5000 [ 50%] (Sampling)
+## Chain 2: Iteration: 3000 / 5000 [ 60%] (Sampling)
+## Chain 2: Iteration: 3500 / 5000 [ 70%] (Sampling)
+## Chain 2: Iteration: 4000 / 5000 [ 80%] (Sampling)
+## Chain 2: Iteration: 4500 / 5000 [ 90%] (Sampling)
+## Chain 2: Iteration: 5000 / 5000 [100%] (Sampling)
+## Chain 2:
+## Chain 2: Elapsed Time: 0.009763 seconds (Warm-up)
+## Chain 2: 0.035949 seconds (Sampling)
+## Chain 2: 0.045712 seconds (Total)
+## Chain 2:
+```
+
+```{r}
+bayes.brms
+
+## Family: binomial
+## Links: mu = logit
+## Formula: alive | trials(total) ~ 1
+## Data: dat (Number of observations: 1)
+## Draws: 2 chains, each with iter = 5000; warmup = 1000; thin = 1;
+## total post-warmup draws = 8000
+##
+## Population-Level Effects:
+## Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
+## Intercept -0.69 0.28 -1.27 -0.14 1.00 3213 3572
+##
+## Draws were sampled using sampling(NUTS). For each parameter, Bulk_ESS
+## and Tail_ESS are effective sample size measures, and Rhat is the potential
+## scale reduction factor on split chains (at convergence, Rhat = 1).
+```
+
+```{r}
+plot(bayes.brms)
+```
+
+```{r}
+draws_fit <- as_draws_matrix(bayes.brms)
+draws_fit
+
+## # A draws_matrix: 4000 iterations, 2 chains, and 2 variables
+## variable
+## draw b_Intercept lp__
+## 1 -0.70 -4.2
+## 2 -0.67 -4.2
+## 3 -0.86 -4.4
+## 4 -0.80 -4.3
+## 5 -1.32 -6.6
+## 6 -0.57 -4.2
+## 7 -0.51 -4.4
+## 8 -0.56 -4.3
+## 9 -0.69 -4.2
+## 10 -0.41 -4.6
+## # ... with 7990 more draws
+
+summarize_draws(plogis(draws_fit[,1]))
 ```
 

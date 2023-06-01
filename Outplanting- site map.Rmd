@@ -94,8 +94,8 @@ site_map2
 ```
 
 ```{r}
-ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 2- Physiology/Chapter 2 figures/First draft figures/Site_map.pdf', site_map2,
+ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Scripts/Chapter-5--Outplanting-AGF-corals/Site_map.pdf', site_map2,
        device="pdf", width=5, height=6, units = "in")
-ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 2- Physiology/Chapter 2 figures/First draft figures/Site_map.png', site_map2,
+ggsave('C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Scripts/Chapter-5--Outplanting-AGF-corals/Site_map.png', site_map2,
        device="png", width=5, height=6, units = "in", dpi = 1000)
 ```
