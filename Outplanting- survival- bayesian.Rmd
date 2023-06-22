@@ -1,0 +1,155 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-06-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse) # for data wrangling
+library(car) # for regression diagnostics
+library(broom) # for tidy output
+library(ggfortify) # for model diagnostics
+library(sjPlot) # for outputs
+library(knitr) # for kable
+library(effects) # for partial effects plots
+library(emmeans) # for estimating marginal means
+library(MASS) # for glm.nb
+library(MuMIn) # for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist) # for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+```
+
+```{r}
+# Necessary functions
+# SummarySE function
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+#set working directory
+#setwd("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data")
+setwd("/Users/jc828813/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data")
+```
+
+```{r}
+# Read in data
+#surv_data <- read.csv("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/Outplant_survival.csv", header=T, fileEncoding="UTF-8-BOM")
+surv_data <- read.csv("/Users/jc828813/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/Outplant_survival.csv", header=T, fileEncoding="UTF-8-BOM")
+glimpse(surv_data)
+```
+
+```{r}
+#change columns to factors
+surv_data <- surv_data %>% mutate(Cross2=factor(Cross2),
+                                  RegionCross=factor(RegionCross),
+                                  Breed=factor(Breed)) %>%
+  filter(Notes != "remove") #filter data of plugs with no juveniles
+```
+
+```{r}
+ggplot(surv_data, aes(y = PREDATION, x = SYMBIONT)) +
+  geom_point(position = position_jitter(width = 0.2, height = 0)) +
+  facet_wrap(~BLOCK)
+```
+
+```{r}
+data.glmmPQL <- glmmPQL(cbind(No.LarvaeIn, No.LarvaeDead) ~ popcross*Temp + Cumulative.hrs,
+                        random=(~1|Rep), weights=No.LarvaeInObserved,
+                        data=mod2020, family=binomial)
+```
+
+```{r}
+2.5 / model.matrix(~Cross, data = surv_data) %>% apply(2, sd)
+```
+
+```{r}
+priors <-
+  prior(normal(0, 2.5), class = "Intercept") +
+  prior(normal(0, 2.5), class = "b") +
+  prior(cauchy(0, 2.5), class = "sd")
+```
+
+```{r}
+surv.form <- bf(RecruitsEnd | trials(RecruitsStart) ~ Cross + (1 | DeviceNo),
+  family = binomial(link = "logit")
+)
+options(width=150)
+surv.form %>% get_prior(data = surv_data)
+```
+
+```{r}
+surv.brm <- brm(surv.form,
+  data = surv_data,
+  prior = priors,
+  sample_prior = "only",
+  iter = 500,
+  warmup = 250,
+  chains = 3, 
+  cores = 3,
+  thin = 5,
+  #control = list(adapt_delta = 0.99),
+  refresh = 0
+)
+```
+
+```{r}
+surv.brm %>%
+  ggpredict(~Cross) %>%
+  plot(add.data = TRUE)
+
+surv.brm %>%
+  ggemmeans(~Cross) %>%
+  plot(add.data = TRUE)
+
+surv.brm %>%
+  conditional_effects() %>%
+  plot(points = TRUE)
+```
+
