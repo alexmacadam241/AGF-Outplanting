@@ -1,0 +1,345 @@
+---
+title: "04_parent_survival_stats"
+author: "Alex Macadam"
+date: "2023-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Survival statistics
+```{r}
+library(tidyverse) #for data wrangling
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(effects)   #for partial effects plots
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist)   #for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+library(easystats)     #framework for stats, modelling and visualisation
+library(patchwork)
+source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
+```
+
+```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+#load data
+survival <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/adult_survival.csv", header=T, fileEncoding="UTF-8-BOM")
+
+survival <- survival |>
+  mutate(
+         Reef = factor(Reef, levels = c('Davies', 'Palms', 'Arlington', 'Martin', 'Wood')),
+         Tank = factor(Tank),
+         Temp = factor(Temp)
+         ) |>
+  filter(T5 != "NA")
+```
+
+Survival summary
+```{r}
+surv_sum <- summarySE(survival, measurevar="T5",
+                     groupvars=c("Reef", "Temp"), na.rm=TRUE)
+```
+
+Stats
+# Fit the model
+form
+```{r}
+survival.form <- bf(T5 | trials(1) ~ Reef * Temp + (1|Tank),
+                  family=binomial(link='logit'))
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors <-
+    prior(normal(3, 2.5), class = 'Intercept') +
+    prior(normal(1.5, 2.5), class = 'b') +
+    prior(student_t(3, 0, 3), class = 'sd') 
+```
+
+run model- n
+```{r}
+survival.brm2 <- brm(survival.form, 
+                  data = survival,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(survival.brm2, file = "data/adult.survival.brm2.rds")
+survival.brm2 <- readRDS("data/adult.survival.brm2.rds")
+```
+
+Assess model
+```{r}
+survival.brm2 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+survival.brm2$fit |> stan_trace()
+```
+
+```{r}
+survival.brm2$fit |> stan_ac()
+```
+
+```{r}
+survival.brm2$fit |> stan_rhat()
+```
+
+```{r}
+survival.brm2$fit |> stan_ess()
+```
+
+```{r}
+survival.brm2 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+survival.resids<- make_brms_dharma_res(survival.brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(survival.resids)) +
+wrap_elements(~plotResiduals(survival.resids, form = factor(rep(1,nrow(survival))))) +
+wrap_elements(~plotResiduals(survival.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(survival.resids))
+```
+
+conditional effects
+```{r}
+survival.brm2 %>%
+    conditional_effects() %>%
+    plot(points = TRUE)
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+survival.brm2 |>
+  as_draws_df() |>
+  mutate(across(everything(), exp)) |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 1),
+    Pg = ~mean(.x > 1),
+    rhat,
+    ess_bulk,
+    ess_tail
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+survival.brm2 |>
+  emmeans(~Reef * Temp, type = "response")
+```
+
+Planned contrast:
+Davies
+Palms
+Arlington
+Martin
+Wood
+
+```{r}
+cmat=cbind(
+  "North vs South" = c( 0, 0, 0, 0, 0, -1/3, -1/3, -1/3, 1/2, 1/2)
+)
+```
+
+```{r}
+survival.em<- survival.brm2 |>
+  emmeans(~Reef * Temp, type = 'response') |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(across(everything(), exp)) |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 1),
+            Pg = mean(.value > 1)
+            )
+survival.em
+```
+
+```{r}
+survival.plot<- survival.brm2 %>%
+  emmeans(~Reef) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = Reef,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "Survival", y = "Reef")
+survival.plot
+```
+
+###############
+Hot only
+```{r}
+survival_hot <- survival |> filter(Temp == "Hot")
+```
+
+Stats
+# Fit the model
+form
+```{r}
+survival.form <- bf(T5 | trials(1) ~ Reef + (1|Tank),
+                  family=binomial(link='logit'))
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors <-
+    prior(normal(3, 2.5), class = 'Intercept') +
+    prior(normal(1.5, 2.5), class = 'b') +
+    prior(student_t(3, 0, 3), class = 'sd') 
+```
+
+run model- n
+```{r}
+survival.brm3 <- brm(survival.form, 
+                  data = survival_hot,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(survival.brm3, file = "data/adult.survival.brm3.rds")
+survival.brm3 <- readRDS("data/adult.survival.brm3.rds")
+```
+
+Assess model
+```{r}
+survival.brm3 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+survival.brm3$fit |> stan_trace()
+```
+
+```{r}
+survival.brm3$fit |> stan_ac()
+```
+
+```{r}
+survival.brm3$fit |> stan_rhat()
+```
+
+```{r}
+survival.brm3$fit |> stan_ess()
+```
+
+```{r}
+survival.brm3 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+survival.resids<- make_brms_dharma_res(survival.brm3, integerResponse = FALSE)
+wrap_elements(~testUniformity(survival.resids)) +
+wrap_elements(~plotResiduals(survival.resids, form = factor(rep(1,nrow(survival))))) +
+wrap_elements(~plotResiduals(survival.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(survival.resids))
+```
+
+```{r}
+survival.plot<- survival.brm3 %>%
+  emmeans(~Reef) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = Reef,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "Survival", y = "Reef")
+survival.plot
+```
+
+```{r}
+#saveRDS(survival.plot, file = "data/adult.survival.hot.plot.rds")
+survival.plot <- readRDS("data/adult.survival.hot.plot.rds")
+```

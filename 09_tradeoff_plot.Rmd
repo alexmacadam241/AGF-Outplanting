@@ -1,0 +1,229 @@
+---
+title: "10_tradeoff_plot"
+author: "Alex Macadam"
+date: "2023-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(wesanderson)
+
+theme_Publication <- function(base_size=14, base_family="arial") {
+      library(grid)
+      library(ggthemes)
+      (theme_foundation(base_size=base_size, base_family=base_family)
+       + theme(plot.title = element_text(face = "bold",
+                                         size = rel(1.2), hjust = 0.5),
+               text = element_text(),
+               panel.background = element_rect(colour = NA),
+               plot.background = element_rect(colour = NA),
+               panel.border = element_rect(colour = NA),
+               axis.title = element_text(face = "bold",size = rel(1)),
+               axis.title.y = element_text(angle=90,vjust =2),
+               axis.title.x = element_text(vjust = -0.2),
+               axis.text = element_text(), 
+               axis.line = element_line(colour="black"),
+               axis.ticks = element_line(),
+               panel.grid.major = element_line(colour="#f0f0f0"),
+               panel.grid.minor = element_blank(),
+               legend.key = element_rect(colour = NA),
+               legend.position = "bottom",
+               legend.direction = "horizontal",
+               legend.key.size= unit(0.2, "cm"),
+               legend.margin = unit(0, "cm"),
+               legend.title = element_text(face="italic"),
+               plot.margin=unit(c(10,5,5,5),"mm"),
+               strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
+               strip.text = element_text(face="bold")
+          ))
+      
+}
+
+scale_fill_Publication <- function(...){
+      library(scales)
+      discrete_scale("fill","Publication",manual_pal(values = c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")), ...)
+
+}
+
+scale_colour_Publication <- function(...){
+      library(scales)
+      discrete_scale("colour","Publication",manual_pal(values = c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")), ...)
+
+}
+
+#pallets
+pd <- position_dodge(width=0.2)
+pal <- wes_palette("Zissou1", 5, type = "discrete")
+scalesize <- function(x) sprintf("%.1f", x)
+pal2 <- c("#386cb0","#7fc97f","#fdb462")
+```
+
+Load data
+```{r}
+survival <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_survival_binary.csv", header=T, fileEncoding="UTF-8-BOM")
+
+size <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_size.csv", header=T, fileEncoding="UTF-8-BOM")
+
+colour <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_colour.csv", header=T, fileEncoding="UTF-8-BOM")
+```
+
+```{r}
+#change catagorical columns to factors and remove NAs
+survival <- survival |>
+  mutate(Family = factor(Family),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Survival != "NA")
+```
+
+```{r}
+#change catagorical columns to factors and remove NAs
+size <- size |>
+  mutate(Family = factor(Family),
+         Timepoint = factor(Timepoint),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Area != "NA")
+```
+
+```{r}
+growth<- size %>% filter(Timepoint %in% c("T0","T1")) %>% dplyr::select(Family, Timepoint, popcross, Area, IndID, Cone, RegionCross, Rack, DevicePos, PlugPosition) %>%
+  pivot_wider(names_from = Timepoint, values_from = Area) %>%
+  tidyr::unnest() %>%
+  mutate(Growth = ((`T1` - `T0`)/`T0`)*100) %>%
+  drop_na(Growth)
+```
+
+```{r}
+#change catagorical columns to factors and remove NAs
+colour <- colour |>
+  mutate(Family = factor(Family),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(ColEnd != "NA")
+```
+
+```{r}
+colour<- colour |>
+  mutate(ColEndCor2 = (100-(ColEndCor / 255)*100))
+```
+
+Mean and SE plot
+```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+surv_sum <- summarySE(survival, measurevar="Survival",
+                     groupvars=c("RegionCross", "popcross"), na.rm=TRUE)
+```
+
+```{r}
+growth_sum <- summarySE(growth, measurevar="Growth",
+                     groupvars=c("RegionCross", "popcross"), na.rm=TRUE)
+```
+
+```{r}
+colour_sum <- summarySE(colour, measurevar="ColEndCor2",
+                     groupvars=c("popcross"), na.rm=TRUE)
+```
+
+```{r}
+surv_sum<- surv_sum |>
+  dplyr::rename(surv_mean = mean) |>
+  dplyr::rename(surv_se = se)
+
+growth_sum<- growth_sum |>
+  dplyr::rename(growth_mean = mean) |>
+  dplyr::rename(growth_se = se)
+
+Tradeoffs<- left_join(surv_sum, growth_sum, by=c('RegionCross','popcross'))
+  
+Tradeoffs<- Tradeoffs |> dplyr::select(RegionCross, popcross, surv_mean, surv_se, growth_mean, growth_se)
+
+Tradeoffs<- Tradeoffs |> mutate(surv_mean = surv_mean *100)
+Tradeoffs<- Tradeoffs |> mutate(surv_se = surv_se *100)
+
+# plot fig6 scatterplot
+plot_tradeoffs<- ggplot(Tradeoffs, aes(x=surv_mean, y=growth_mean))+
+  #geom_hline(yintercept = 0)+
+  #geom_hline(data=filter(Tradeoffs, Family=='DRxDR'), aes(yintercept=Mean), lty='dashed', color='gray')+
+  #geom_vline(data=filter(Tradeoffs, Family=='DRxDR'), aes(xintercept=Surv), lty='dashed', color='gray')+
+  geom_errorbar(aes(ymin=growth_mean-growth_se, ymax=growth_mean+growth_se, color=RegionCross), size=0.5)+
+  geom_errorbarh(aes(xmin=surv_mean-surv_se, xmax=surv_mean+surv_se, color=RegionCross), size=0.5)+
+  geom_point(aes(color=RegionCross), size=2)+
+  #geom_smooth(aes(x=surv_mean, y=growth_mean), method=lm, se=FALSE, colour = "black") +
+  #theme_Publication()+
+  theme_classic()+
+  ggrepel::geom_text_repel(aes(label=popcross, color=RegionCross), size=3)+
+  scale_y_continuous(limits=c(180,260), breaks=seq(180, 260, 10))+
+  scale_x_continuous(limits=c(20,100), breaks=c(seq(20,100,10)))+
+  scale_color_manual(values=c('black', 'gray50', 'goldenrod2', 'firebrick3'))+
+  labs(y = "Growth (%)", x = "Survival (%)")
+
+plot_tradeoffs
+```
+
+```{r}
+#saveRDS(plot_tradeoffs, file = "data/juv.tradeoff.plot.rds")
+plot_tradeoffs <- readRDS("data/juv.tradeoff.plot.rds")
+```

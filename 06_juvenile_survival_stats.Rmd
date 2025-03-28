@@ -1,0 +1,466 @@
+---
+title: "06_juvenile_survival_stats"
+author: "Alex Macadam"
+date: "2023-10-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Survival statistics
+```{r}
+library(tidyverse) #for data wrangling
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(effects)   #for partial effects plots
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist)   #for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+library(easystats)     #framework for stats, modelling and visualisation
+library(patchwork)
+source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
+```
+
+```{r}
+#load data
+survival <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_survival_binary.csv", header=T, fileEncoding="UTF-8-BOM") |>
+  mutate(Family = factor(Family),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Survival != "NA")
+```
+
+```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+surv.sum.reef.se <- summarySE(survival, measurevar="Survival",
+                          groupvars=c("popcross"), na.rm=TRUE)
+
+surv.sum.region.se <- summarySE(survival, measurevar="Survival",
+                          groupvars=c("Breed"), na.rm=TRUE)
+
+surv.sum.se <- survival|>
+  dplyr::filter(Breed %in% c("Hybrid","CentralPure")) |>
+  mutate(All = "All") |>
+  summarySE(measurevar="Survival",
+                          groupvars=c("All"), na.rm=TRUE)
+
+surv.sum.se <- survival|>
+  dplyr::filter(Breed %in% c("Hybrid","NorthPure")) |>
+  mutate(All = "All") |>
+  summarySE(measurevar="Survival",
+                          groupvars=c("All"), na.rm=TRUE)
+
+surv.sum.se <- survival|>
+  dplyr::filter(Breed %in% c("CentralPure","NorthPure")) |>
+  mutate(All = "All") |>
+  summarySE(measurevar="Survival",
+                          groupvars=c("All"), na.rm=TRUE)
+```
+
+# Fit the model
+## Random intercept
+form
+```{r}
+survival.form <- bf(Survival | trials(1) ~ popcross + (1|Rack),
+                  family=binomial(link='logit'))
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors <-
+    prior(normal(0, 1.7), class = 'Intercept') +
+    prior(normal(0, 1.7), class = 'b') +
+    prior(student_t(3, 0, 1.7), class = 'sd') 
+```
+
+run model- n
+```{r}
+survival.brm2 <- brm(survival.form, 
+                  data = survival,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(survival.brm2, file = "juv.survival.brm2.rds")
+survival.brm2 <- readRDS("juv.survival.brm2.rds")
+```
+
+conditional effects
+```{r}
+survival.brm2 %>%
+    conditional_effects() %>%
+    plot(points = TRUE)
+```
+
+```{r}
+survival.brm2 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+survival.brm2$fit |> stan_trace()
+```
+
+```{r}
+survival.brm2$fit |> stan_ac()
+```
+
+```{r}
+survival.brm2$fit |> stan_rhat()
+```
+
+```{r}
+survival.brm2$fit |> stan_ess()
+```
+
+```{r}
+survival.brm2 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+survival.resids<- make_brms_dharma_res(survival.brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(survival.resids)) +
+wrap_elements(~plotResiduals(survival.resids, form = factor(rep(1,nrow(survival))))) +
+wrap_elements(~plotResiduals(survival.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(survival.resids))
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+survival.brm2 |>
+  as_draws_df() |>
+  mutate(across(everything(), exp)) |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 1),
+    Pg = ~mean(.x > 1),
+    rhat,
+    ess_bulk,
+    ess_tail
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+survival.brm2 |>
+  emmeans(~popcross, type = "response")
+```
+
+Planned contrast:
+PIxPI
+DAxDA 
+DAxAR     
+DAxMA              
+MAxDA         
+MAxMA              
+WDxMA   
+
+```{r}
+cmat=cbind(
+  "Pure vs Hybrid" = c(-1/3, -1/3, 1/4, 1/4, 1/4, -1/3, 1/4),
+  "PureCentral vs Hybrid" = c(-1/2, -1/2, 1/3, 1/3, 1/3, 0, 0),
+  "PureCentral vs Hybrid 2" = c(-1/2, -1/2, 1/4, 1/4, 1/4, 0, 1/4),
+  "PureNorth vs Hybrid" = c(0, 0, 1/3, 1/3, 1/3, -1, 0),
+  "PureNorth vs Hybrid2" = c(0, 0, 1/3, 1/3, 1/3, -1/2, -1/2),
+  "Palms vs Davies" = c(1, -1, 0, 0, 0, 0, 0),
+  "MARmom vs MARdad" = c(0, 0, 0, 1, -1, 0, 0),
+  "PureCentral vs PureNorth" = c(-1/2, -1/2, 0, 0, 0, 1/2, 1/2),
+  "PureCentral vs PureNorth2" = c(-1/2, -1/2, 0, 0, 0, 1, 0),
+  "MAxDA vs PIxPI" = c(-1, 0, 0, 0, 1, 0, 0),
+  "DAxMA vs PIxPI" = c(-1, 0, 0, 1, 0, 0, 0),
+  "Hybrid vs PIxPI" = c(-1, 0, 0, 1/2, 1/2, 0, 0)
+)
+```
+
+```{r}
+survival.em<- survival.brm2 |>
+  emmeans(~popcross, type = 'response') |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(across(everything(), exp)) |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 1),
+            Pg = mean(.value > 1)
+            )
+survival.em
+```
+  "Pure vs Hybrid": y = 4.119. Hybrid has 311% higher odds of survival than pure juveniles (Pg = 1.000)
+  
+  "PureCentral vs Hybrid": y = 5.622. Hybrids have 462% higher odds of survival than pure central juveniles (Pg = 1.000)
+  "PureCentral vs Hybrid 2": y = 5.060. Hybrids have 406% higher odds of survival than pure central juveniles (Pg = 1.000) 
+  
+  "PureNorth vs Hybrid": y = 3.019. Hybrids have 201% higher odds of survival than pure central juveniles (Pg = 1.000)
+  "PureNorth vs Hybrid2": y = 2.139. Hybrids have 114% higher odds of survival than pure central juveniles (Pg = 1.000)
+  
+  "Palms vs Davies": y = 1.122. Palms has 12% higher odds of survival than Davies (Pl = 0.955)
+  
+  "PureCentral vs PureNorth": y = 2.621. Hybrids have 162% higher odds of survival than pure central juveniles (Pg = 1.000)
+  "PureCentral vs PureNorth2": y = 1.860. Hybrids have 86% higher odds of survival than pure central juveniles (Pg = 1.000)
+
+  "MARmom vs MARdad": y = 2.495. MARdad have a 150% higher odds of survival than MARmom juveniles (Pg = 1.000)
+
+#Plot
+get variables
+```{r}
+survival.brm2 %>% get_variables()
+```
+
+```{r}
+survival.plot<- survival.brm2 %>%
+  emmeans(~popcross) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = popcross,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "Survival", y = "Population Cross")
+survival.plot
+```
+
+```{r}
+#saveRDS(survival.plot, file = "data/juv.survival.plot.reef.rds")
+#survival.plot <- readRDS("data/juv.survival.plot.reef.rds")
+```
+
+#############
+by region
+# Fit the model
+## Random intercept
+form
+```{r}
+survival.form <- bf(Survival | trials(1) ~ RegionCross + (1|Rack),
+                  family=binomial(link='logit'))
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors <-
+    prior(normal(0, 1.7), class = 'Intercept') +
+    prior(normal(0, 1.7), class = 'b') +
+    prior(student_t(3, 0, 1.7), class = 'sd') 
+```
+
+run model- n
+```{r}
+survival.brm3 <- brm(survival.form, 
+                  data = survival,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(survival.brm3, file = "data/juv.survival.brm3.rds")
+#survival.brm3 <- readRDS("data/juv.survival.brm3.rds")
+```
+
+conditional effects
+```{r}
+survival.brm3 %>%
+    conditional_effects() %>%
+    plot(points = TRUE)
+```
+
+```{r}
+survival.brm3 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+survival.brm3$fit |> stan_trace()
+```
+
+```{r}
+survival.brm3$fit |> stan_ac()
+```
+
+```{r}
+survival.brm3$fit |> stan_rhat()
+```
+
+```{r}
+survival.brm3$fit |> stan_ess()
+```
+
+```{r}
+survival.brm3 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+survival.resids<- make_brms_dharma_res(survival.brm3, integerResponse = FALSE)
+wrap_elements(~testUniformity(survival.resids)) +
+wrap_elements(~plotResiduals(survival.resids, form = factor(rep(1,nrow(survival))))) +
+wrap_elements(~plotResiduals(survival.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(survival.resids))
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+survival.brm3 |>
+  as_draws_df() |>
+  mutate(across(everything(), exp)) |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 1),
+    Pg = ~mean(.x > 1),
+    rhat,
+    ess_bulk,
+    ess_tail
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+survival.brm3 |>
+  emmeans(~RegionCross, type = "response")
+```
+
+Planned contrast:
+CentralxCentral
+Hybrid
+NorthxNorth
+
+```{r}
+cmat=cbind(
+  "Central vs North" = c(-1, 0, 1),
+  "Central vs Hybrid" = c(-1, 1, 0),
+  "North vs Hybrid" = c(0, 1, -1)
+)
+```
+
+```{r}
+survival.em<- survival.brm3 |>
+  emmeans(~RegionCross, type = 'response') |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(across(everything(), exp)) |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 1),
+            Pg = mean(.value > 1)
+            )
+survival.em
+```
+"Central vs Hybrid": y = 1.38. Hybrid has 138% higher odds of survival than pure juveniles (Pg = 1.000)
+"Central vs North": y = 0.660. Hybrid has 66% higher odds of survival than pure juveniles (Pg = 1.000)
+"North vs Hybrid": y = 0.721. Hybrid has 72% higher odds of survival than pure juveniles (Pg = 0.997)
+
+#Plot
+get variables
+```{r}
+survival.brm3 %>% get_variables()
+```
+
+```{r}
+survival.plot<- survival.brm3 %>%
+  emmeans(~RegionCross) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = RegionCross,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "Survival", y = "Population Cross")
+survival.plot
+```
+
+```{r}
+#saveRDS(survival.plot, file = "data/juv.survival.plot.region.rds")
+#survival.plot <- readRDS("data/juv.survival.plot.region.rds")
+```

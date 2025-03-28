@@ -1,0 +1,431 @@
+---
+title: "11_adult_ITS2"
+author: "Alex Macadam"
+date: "2023-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("dplyr", "edgeR", "ggplot2", "MCMC.OTU", "pairwiseAdonis", "rcartocolor",
+               "RColorBrewer", "Redmonder", "reshape2", "vegan")
+
+pacman::p_load_gh("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+
+
+if (!require("edgeR")){BiocManager::install("edgeR", update = FALSE) 
+  library(edgeR)}
+
+options("scipen" = 10)
+```
+
+```{r}
+its2Seq = read.delim("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/439_20231130T121104_DBV_20231130T184910.seqs.absolute.abund_only2.txt", header = TRUE, check.names = FALSE)
+head(its2Seq)
+
+its2MetaData = read.delim("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/439_20231130T121104_DBV_20231130T184910.seqs.absolute.meta_only.txt", header = TRUE, check.names = FALSE)
+head(its2MetaData)
+
+#its2Seq = cbind(its2Seq[1], its2MetaData[,2:3], its2Seq[,c(2:length(its2Seq))])
+#colnames(its2Seq)[3] = "reef"
+#head(its2Seq)
+
+its2Seq$reef = factor(its2Seq$reef, levels = c("Fantome", "Davies", "Arlington", "Moore", "Martin", "Wood"))
+levels(its2Seq$reef)
+
+#its2Seq$Sample_site = factor(its2Seq$Sample_site, levels(its2Seq$Sample_site)[c(4, 2, 3, 1)])
+#its2Seq = its2Seq[order(its2Seq$Sample_site, its2Seq$reef), ]
+#levels(its2Seq$Sample_site)
+
+head(its2Seq)
+```
+
+Count number of reads
+```{r}
+sum(its2MetaData$raw_contigs)
+sum(its2MetaData$post_qc_absolute_seqs)
+sum(its2MetaData$post_med_absolute)
+```
+
+First we purge sequences and transpose the data to work with edgeR
+```{r}
+goods = purgeOutliers(its2Seq, count.columns = 4:length(its2Seq), otu.cut = 0.0001, sampleZcut = -5)
+```
+
+```{r}
+its2SeqTransposed = t(goods[, 4:length(goods[1, ])])
+its2SeqList = DGEList(counts = its2SeqTransposed)
+head(its2SeqList$samples)
+```
+
+Now we can use TMM normalization in edgeR
+```{r}
+its2SeqNorm =  calcNormFactors(its2SeqList, method = "TMM")
+head(its2SeqNorm$samples)
+its2TMM = t(cpm(its2SeqNorm, normalized.lib.sizes = TRUE))
+its2SeqNorm = cbind(its2Seq[,c(1:3)], its2TMM)
+colnames(its2SeqNorm)[4] = "Clade C"
+
+head(its2SeqNorm)
+```
+
+Calculation of ITS2 sequence relative abundances
+Now we can calculate the relative abundance of each ITS2 sequences per sample. This will allow us to view the assemblages in a faceted barplot.
+```{r}
+colOrder = order(colSums(its2SeqNorm[4:length(its2SeqNorm[1,])]), decreasing = FALSE) + 3
+
+its2SeqPerc = cbind(its2SeqNorm[,c(1:3)], its2SeqNorm[,c(colOrder)])
+
+its2SeqPerc$sum = apply(its2SeqPerc[, c(4:length(its2SeqPerc[1,]))], 1, function(x) {
+  sum(x, na.rm = T)
+})
+
+its2SeqPerc = cbind(its2SeqPerc[, c(1:3)], (its2SeqPerc[, c(4:(ncol(its2SeqPerc)-1))] 
+                                                / its2SeqPerc$sum))
+```
+
+Now a quick sanity check. If this worked the sum of each row should = 100% (i.e. “1”).
+```{r}
+apply(its2SeqPerc[, c(4:(ncol(its2SeqPerc)))], 1, function(x) {
+  sum(x, na.rm = T)
+})
+```
+
+Everything adds up to 1, this is good! The code works.
+
+I added an additional column to sort better for the stacked barplot. This was just a work around to get the facet_grid() function to play nice with our data. I added a coulumn “barPlotOrder” and for each population I filled in a series 1:n for each sample at each Site:Depth combo, so now there’s no large blank expanses on the plot.
+```{r}
+sampleCounts = plyr::count(its2SeqPerc, c('reef'))
+meltedList = melt(lapply(sampleCounts$freq,function(x){c(1:x)}))
+its2SeqPerc$barPlotOrder = meltedList$value
+its2SeqPerc=its2SeqPerc[c(1,ncol(its2SeqPerc),2:(ncol(its2SeqPerc)-1))]
+
+head(its2SeqPerc)
+
+gssSeq = otuStack(its2SeqPerc, count.columns = c(5:length(its2SeqPerc[1, ])),
+                  condition.columns = c(1:4))[1:6674,] # remove summ rows
+```
+
+```{r}
+gssSeq<- read.csv("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/gssSeq.csv", header=T, fileEncoding="UTF-8-BOM")
+```
+
+```{r}
+levels(gssSeq$otu)
+
+#levels(gssSeq$reef) = c("Fantome", "Davies", "Arlington", "Moore", "Martin", "Wood")
+
+gssSeq$reef = factor(gssSeq$reef, levels=c("Fantome", "Davies", "Arlington", "Moore", "Martin", "Wood"))
+levels(gssSeq$reef)
+```
+
+Consruct ITS2 sequence barplot
+```{r}
+colorCount = length(c(5:length(its2SeqPerc[1,])))
+getPalette = colorRampPalette(redmonder.pal(8, "qPBI"), bias = 1.7)
+```
+
+```{r}
+counts<- gssSeq |>
+  group_by(reef, otu) |>
+  dplyr::summarise(count)
+
+otus<- gssSeq |>
+  group_by(reef) |>
+  dplyr::summarise(otu)
+```
+
+```{r}
+its2SeqPlotA = ggplot(gssSeq, aes(x = barPlotOrder2, y = count, fill = factor(otu))) +
+  geom_bar(position = "stack", stat = "identity", color = "black",
+           size = 0.25) + 
+  ylab("Proportion") +
+  scale_fill_manual(values=rev(getPalette(colorCount)))+ 
+  
+  labs(fill = expression(paste(italic("ITS2"), " sequence"))) +
+  guides(fill = guide_legend(ncol = 9, reverse = TRUE)) +
+  facet_grid( ~ reef, scales = "free_x") + #faceting plots by Depth and Site
+  theme_bw()
+
+its2SeqPlot = its2SeqPlotA +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(color = "black", size = 12),
+        axis.text.y = element_text(color = "black", size = 12),
+        legend.position = "bottom",
+        legend.justification = "left",
+        legend.direction = "horizontal",
+        legend.title = element_text(color = "black", size = 12, hjust = 0.5, angle = 90),
+        legend.text = element_text(color = "black", size = 10),
+        legend.key = element_blank(),
+        legend.key.size = unit(0.4,"line"),
+        legend.background = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_blank(),
+        strip.text.x = element_text(size = 12),
+        strip.text.y = element_text(size = 12),
+        strip.background = element_rect(fill = "white", size = 0.9)
+  )
+
+its2SeqPlot
+```
+
+ITS2 type profiles
+We can now look at the ITS2 type profiles predicted by SymPortal.
+
+Prepare ITS2 type profile data
+Similar to what we did with the sequence data
+```{r}
+its2Profs = read.delim("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/439_20231130T121104_DBV_20231130T184910.profiles.absolute.abund_and_meta2.txt", header = TRUE, check.names = FALSE)
+head(its2Profs)
+
+its2Profs = cbind(its2Profs[1], its2MetaData[,2:3], its2Profs[,c(2:length(its2Profs))])
+colnames(its2Profs)[3] = "reef"
+head(its2Profs)
+
+its2Profs$reef = factor(its2Profs$reef, levels = c("Fantome", "Davies", "Arlington", "Moore", "Martin", "Wood"))
+levels(its2Profs$reef)
+
+#its2Profs$Sample_site = factor(its2Profs$Sample_site, levels(its2Profs$Sample_site)[c(4, 2, 3, 1)])
+#its2Profs = its2Profs[order(its2Profs$Sample_site, its2Profs$reef), ]
+#head(its2Profs)
+
+sampleCounts = plyr::count(its2Profs, c('reef'))
+meltedList = reshape2::melt(lapply(sampleCounts$freq,function(x){c(1:x)}))
+its2Profs$barPlotOrder = meltedList$value
+its2Profs=its2Profs[c(1,ncol(its2Profs),2:(ncol(its2Profs)-1))]
+
+head(its2Profs)
+```
+
+```{r}
+its2Profs<- read.csv("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/its2Profs.csv", header=T, fileEncoding="UTF-8-BOM")
+```
+
+Normalization of ITS2 type profile reads
+Similar to what we did with the ITS2 sequences, but we won’t purge any low abundance reads, since we only have 13 total ITS2 type profiles.
+```{r}
+its2ProfsTransposed = t(its2Profs[, 5:length(its2Profs[1, ])])
+its2ProfsList = DGEList(counts = its2ProfsTransposed)
+head(its2ProfsList$samples)
+
+its2ProfsNorm =  calcNormFactors(its2ProfsList, method = "TMM")
+head(its2ProfsNorm$samples)
+its2TMM = t(cpm(its2ProfsNorm, normalized.lib.sizes = TRUE))
+its2ProfsNorm = cbind(its2Profs[,c(1:4)], its2TMM)
+
+head(its2ProfsNorm)
+```
+
+Preparing ITS2 type profiles for plotting
+```{r}
+colOrder2 = order(colSums(its2ProfsNorm[5:length(its2ProfsNorm[1,])]), decreasing = TRUE) + 4
+
+its2ProfsPerc = cbind(its2ProfsNorm[,c(1:4)],its2ProfsNorm[,c(colOrder2)])
+its2ProfsPerc$sum = apply(its2ProfsPerc[, c(5:length(its2ProfsPerc[1,]))], 1, function(x) {
+  sum(x, na.rm = T)
+})
+
+its2ProfsPerc = cbind(its2ProfsPerc[, c(1:4)], (its2ProfsPerc[, c(5:(ncol(its2ProfsPerc)-1))] 
+                                              / its2ProfsPerc$sum))
+head(its2ProfsPerc)
+```
+
+```{r}
+apply(its2ProfsPerc[, c(5:(ncol(its2ProfsPerc)))], 1, function(x) {
+  sum(x, na.rm = T)
+})
+```
+
+Again, everything looks good!
+```{r}
+gssProf = otuStack(its2ProfsPerc, count.columns = c(5:length(its2ProfsPerc[1, ])),
+               condition.columns = c(1:4))[1:470,] # remove summ rows
+
+levels(gssProf$otu)
+
+levels(gssProf$reef)
+levels(gssProf$reef) = c("Fantome", "Davies", "Arlington", "Moore", "Martin", "Wood")
+levels(gssProf$reef)
+```
+
+Consruct ITS2 type profile barplot
+```{r}
+colorCount2 = length(c(4:length(its2ProfsPerc[1,]))) +1
+getPalette2 = colorRampPalette(redmonder.pal(8, "qPBI"))
+```
+
+```{r}
+its2ProfsPlotA = ggplot(gssProf, aes(x = barPlotOrder, y = count, fill = factor(otu))) +
+  geom_bar(position = "stack", stat = "identity", color = "black", size = 0.25) + 
+  ylab("Proportion") +
+  scale_fill_manual(values = c(getPalette2(colorCount2)[2:12], 
+                               carto_pal(n = 7, "Tropic")[c(6,7)]))+
+  labs(fill = expression(paste(italic("ITS2"), " type profile"))) +
+  guides(fill = guide_legend(ncol = 2, reverse = FALSE)) +
+  facet_grid(~ reef, scales = "free_x") + #faceting plots by Depth and Site
+  theme_bw()
+
+its2ProfsPlot = its2ProfsPlotA +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(color = "black", size = 12),
+        axis.text.y = element_text(color = "black", size = 12),
+        legend.position = "bottom",
+        legend.title = element_text(color = "black", size = 12, hjust = 0.5, angle = 90),
+        legend.text = element_text(color = "black", size = 10),
+        legend.key = element_blank(),
+        legend.key.size = unit(0.75,"line"),
+        legend.background = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        plot.background = element_blank(),
+        strip.text.x = element_text(size = 12),
+        strip.text.y = element_text(size = 12),
+        strip.background = element_rect(fill = "white", size = 0.9)
+  )
+
+its2ProfsPlot
+```
+
+Statistical analyses on ITS2 type profiles
+Cheking dispersion with PERMDISP
+Using betadisper() in vegan to look at multivariate homogeneity of dispersion (PERMDISP) between sites. This is using Bray-Curtis dissimilarity.
+```{r}
+set.seed(694) #setting seed allows repetition of randomized processes
+
+its2dispS = betadisper(vegdist(its2ProfsNorm[, c(5:ncol(its2ProfsNorm))]), its2ProfsNorm$reef)
+
+anova(its2dispS)
+```
+
+significant effect of reef on betadiversity.
+
+Permutation test for pairwise comparisons
+Follow up with a permutation test to see where differences occur.
+```{r}
+set.seed(694)
+
+its2PermTest = permutest(its2dispS, permutations = 9999, pairwise = T, model = "full", )
+its2PermTest
+```
+
+```{r}
+its2PermTest$statistic
+```
+
+Running PERMANOVA in R
+Now let’s see how different communities are from each other with PERMANOVA. We will utilize the adonis() function in vegan. We will use Bray-Curtis similarity for our distance matrix and run a total 0f 9,999 permutations, and test the effects of reef. Dispersion is heteroschedastic, but PERMANOVA is robust to deviations in homgeneity of variance ( Anderson and Walsh, 2013)
+```{r}
+set.seed(694)
+its2Adonis = adonis(its2ProfsNorm[, c(5:ncol(its2ProfsNorm))] ~ reef, 
+data = its2ProfsNorm, permutations = 9999, method = "bray")
+
+its2Adonis
+```
+PERMANOVA reveals that reef has a signifcant effect on Symbiodiniaceae associations in our A. hyacinthus samples.
+
+Pairwise PERMANOVA for multiple comparisons
+Since we found that Depth was a significant factor in our PERMANOVA we can now use pairwise PERMANOVA to reveal where differences occur across depth. This utilizes the package pairwiseAdonis, where we will again use Bray-Curtis similarity and 9,999 permutations. We also have added false discovery rate (FDR) corrections since we are perfoming multiple comparisons.
+```{r}
+set.seed(694)
+its2PWAdonis = pairwise.adonis(its2ProfsNorm[, c(5:ncol(its2ProfsNorm))],
+                               factors = its2ProfsNorm$reef,
+                               sim.method = "bray", p.adjust.m = "BH", perm = 9999)
+                
+its2PWAdonis
+
+#write.csv(its2PWAdonis, "C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Data/adult ITS2/its2PWAdonis.csv")
+```
+We see that again see differences between samples.
+
+SIMPER test between north and south populations
+Similarity percentage test (SIMPER) will show us the ITS2 type profiles that contribute the most to the dissimilarity between depth zones
+```{r}
+depths = its2ProfsNorm$Depth_zone
+levels(depths) = c("Shallow","Shallow","Deep","Deep")
+depths
+its2ProfsNorm$depth = depths
+its2ProfsNorm = cbind(its2ProfsNorm[c(1:4)],its2ProfsNorm[ncol(its2ProfsNorm)],its2ProfsNorm[c(5:(ncol(its2ProfsNorm)-1))])
+head(its2ProfsNorm)
+its2SimperD = simper(sqrt(its2ProfsNorm[, c(6:ncol(its2ProfsNorm))]), its2ProfsNorm$depth)
+summary(its2SimperD)
+```
+NMDS
+
+ITS2 NMDS
+```{r}
+#make community matrix - extract columns with abundance information
+com = its2SeqNorm[,4:ncol(its2SeqNorm)]
+```
+
+```{r}
+#turn abundance data frame into a matrix
+m_com = as.matrix(com)
+```
+
+```{r}
+set.seed(123)
+nmds = metaMDS(m_com, distance = "bray")
+nmds
+```
+
+```{r}
+plot(nmds)
+```
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites from newer versions of vegan package
+data.scores = as.data.frame(scores(nmds)$sites)
+```
+
+```{r}
+#add columns to data frame 
+data.scores$name = its2SeqNorm$name
+data.scores$reef = its2SeqNorm$reef
+#data.scores$Type = its2SeqNorm$Type
+ 
+head(data.scores)
+```
+
+```{r}
+library(ggplot2)
+
+xx = ggplot(data.scores, aes(x = NMDS1, y = NMDS2)) + 
+    geom_point(size = 4, aes(colour = reef))+ 
+    theme(axis.text.y = element_text(colour = "black", size = 12, face = "bold"), 
+    axis.text.x = element_text(colour = "black", face = "bold", size = 12), 
+    legend.text = element_text(size = 12, face ="bold", colour ="black"), 
+    legend.position = "right", axis.title.y = element_text(face = "bold", size = 14), 
+    axis.title.x = element_text(face = "bold", size = 14, colour = "black"), 
+    legend.title = element_text(size = 14, colour = "black", face = "bold"), 
+    panel.background = element_blank(), panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+    legend.key=element_blank()) + 
+    labs(x = "NMDS1", colour = "Reef", y = "NMDS2", shape = "Type")  + 
+    scale_colour_manual(values = c("#264653","#287271", "#2A9D8F", "#8AB17D", "#E9C46A", "#F4A261", "#E76F51")) 
+ 
+xx
+```
+
+```{r}
+library(patchwork)
+
+ITS2_plot<- its2SeqPlot / its2ProfsPlot
+```
+
+```{r}
+ggsave("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Figures/Mock plots/Figure_4_ITS2.pdf", ITS2_plot, device="pdf", width=8, height=8, units = "in")
+```
+
+```{r}
+ggsave("C:/Users/amacadam/Dropbox/PhD/Chapter 5- Outplanting/Chapter 5 Figures/Mock plots/Figure_4_NMDS.pdf", xx, device="pdf", width=6, height=4, units = "in")
+```

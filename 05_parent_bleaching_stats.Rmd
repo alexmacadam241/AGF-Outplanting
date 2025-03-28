@@ -1,0 +1,463 @@
+---
+title: "05_parent_bleaching_stats"
+output: html_document
+date: "2024-08-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##col statistics
+```{r}
+set.seed(123)
+library(tidyverse) #for data wrangling
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(effects)   #for partial effects plots
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist)   #for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+library(easystats)     #framework for stats, modelling and visualisation
+library(patchwork)
+source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
+```
+
+```{r}
+# Function for summarising col standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+#load data
+colour <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/adult_colour.csv", header=T, fileEncoding="UTF-8-BOM") |> filter(Temp == "Hot")
+
+colour <- colour |>
+  dplyr::mutate(
+         Reef = factor(Reef, levels = c('Davies', 'Palms', 'Arlington', 'Martin', 'Wood')),
+         Tank = factor(Tank),
+         Temp = factor(Temp)
+         ) |>
+  dplyr::filter(Timepoint != "1") |>
+  dplyr::filter(Species == "A. hyacinthus")
+```
+
+```{r}
+colour$reefxtemp <- paste(colour$Reef, colour$Temp, sep='_')
+colour$reefxtemp <- as.factor(colour$reefxtemp)
+```
+
+Colour summary
+```{r}
+col_sum2 <- colour |>
+  dplyr::filter(Timepoint == "4") |>
+  summarySE(measurevar="CalibratedMeanGrey",
+                     groupvars=c("Reef", "Temp"), na.rm=TRUE)
+```
+
+Colour change summary
+```{r}
+bleaching<- colour |>
+  tidyr::pivot_wider(names_from = "Timepoint",
+    values_from = "CalibratedMeanGrey",
+    id_cols = c("CoralID","Tank", "Temp", "Reef")) |>
+  dplyr::mutate(Bleaching = `4` - `0`)
+
+bleach_sum <- bleaching |>
+  summarySE(measurevar="Bleaching",
+                     groupvars=c("Reef", "Temp"), na.rm=TRUE)
+```
+
+```{r}
+bleaching$reefxtemp <- paste(bleaching$Reef, bleaching$Temp, sep='_')
+bleaching$reefxtemp <- as.factor(bleaching$reefxtemp)
+```
+
+##############################################
+Colour Stats
+# Fit the model
+## Random intercept
+form
+```{r}
+col.form <- bf(CalibratedMeanGrey ~ Reef + (1|Tank),
+                     family = gaussian()
+                   )
+```
+
+```{r}
+options(width=150)
+col.form %>% get_prior(data = colour)
+options(width=80)
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors<- prior(normal(3, 2.5), class = "Intercept") +
+    prior(normal(0, 2), class = "b") +
+    prior(normal(0, 2), class = "sd", group = "Tank") +
+    #prior(normal(0, 2), class = "sd", group = "Temp") +
+    prior(student_t(3, 0, 2), class = 'sigma') +
+    prior(cauchy(0,2), class = 'sd')
+```
+
+run model- n
+```{r}
+col.brm2 <- brms::brm(col.form, 
+                  data = colour,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+saveRDS(col.brm2, file = "data/adult.col.brm2.rds")
+#col.brm2 <- readRDS("data/adult.col.brm2.rds")
+```
+
+Assess model
+```{r}
+col.brm2 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+col.brm2$fit |> stan_trace()
+```
+
+```{r}
+col.brm2$fit |> stan_ac()
+```
+
+```{r}
+col.brm2$fit |> stan_rhat()
+```
+
+```{r}
+col.brm2$fit |> stan_ess()
+```
+
+```{r}
+col.brm2 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+col.resids<- make_brms_dharma_res(col.brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(col.resids)) +
+wrap_elements(~plotResiduals(col.resids, form = factor(rep(1,nrow(col))))) +
+wrap_elements(~plotResiduals(col.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(col.resids))
+```
+
+conditional effects
+```{r}
+col.brm2 %>%
+    conditional_effects() %>%
+    plot(points = TRUE)
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+col.brm2 |>
+  as_draws_df() |>
+  mutate(across(everything(), exp)) |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 1),
+    Pg = ~mean(.x > 1),
+    rhat,
+    ess_bulk,
+    ess_tail
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+col.brm2 |>
+  emmeans(~Reef, type = "response")
+```
+
+Planned contrast:
+ Arlington_Ambient
+ Arlington_Hot
+ Davies_Ambient
+ Davies_Hot
+ Martin_Ambient
+ Martin_Hot
+ Palms_Ambient
+ Palms_Hot
+ Wood_Ambient
+ Wood_Hot
+
+```{r}
+cmat=cbind(
+  "North vs South" = c(0, -1/3, 0, -1/3, 0, 1/2, 0, -1/3, 0, 1/2)
+)
+
+cmat=cbind(
+  "North vs South" = c(-1/3, -1/3, 1/2, -1/3, 1/2)
+)
+```
+
+```{r}
+col.em<- col.brm2 |>
+  emmeans(~Reef, type = 'response') |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(across(everything(), exp)) |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 1),
+            Pg = mean(.value > 1)
+            )
+col.em
+```
+
+```{r}
+col.plot<- col.brm2 %>%
+  emmeans(~Reef) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = Reef,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "col", y = "Reef")
+col.plot
+```
+
+```{r}
+#saveRDS(col.plot, file = "data/adult.col.plot.rds")
+#col.plot <- readRDS("data/adult.col.plot.rds")
+```
+
+##############################################
+Bleaching Stats
+# Fit the model
+form
+```{r}
+bleach.form <- bf(Bleaching ~ Reef + (1|Tank),
+                     family = gaussian()
+                   )
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors<- prior(normal(3, 2.5), class = "Intercept") +
+    prior(normal(0, 2), class = "b") +
+    prior(normal(0, 2), class = "sd", group = "Tank") +
+    #prior(normal(0, 2), class = "sd", group = "Temp") +
+    prior(student_t(3, 0, 2), class = 'sigma') +
+    prior(cauchy(0,2), class = 'sd')
+```
+
+run model- n
+```{r}
+bleach.brm2 <- brms::brm(bleach.form, 
+                  data = bleaching,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(bleach.brm2, file = "data/adult.bleach.brm2.rds")
+#bleach.brm2 <- readRDS("data/adult.bleach.brm2.rds")
+```
+
+Assess model
+```{r}
+bleach.brm2 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+bleach.brm2$fit |> stan_trace()
+```
+
+```{r}
+bleach.brm2$fit |> stan_ac()
+```
+
+```{r}
+bleach.brm2$fit |> stan_rhat()
+```
+
+```{r}
+bleach.brm2$fit |> stan_ess()
+```
+
+```{r}
+bleach.brm2 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+bleach.resids<- make_brms_dharma_res(bleach.brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(bleach.resids)) +
+wrap_elements(~plotResiduals(bleach.resids, form = factor(rep(1,nrow(bleach))))) +
+wrap_elements(~plotResiduals(bleach.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(bleach.resids))
+```
+
+conditional effects
+```{r}
+bleach.brm2 %>%
+    conditional_effects() %>%
+    plot(points = TRUE)
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+bleach.brm2 |>
+  as_draws_df() |>
+  mutate(across(everything(), exp)) |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 1),
+    Pg = ~mean(.x > 1),
+    rhat,
+    ess_bulk,
+    ess_tail
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+bleach.brm2 |>
+  emmeans(~Reef, type = "response")
+```
+
+Planned contrast:
+ Arlington_Ambient
+ Arlington_Hot
+ Davies_Ambient
+ Davies_Hot
+ Martin_Ambient
+ Martin_Hot
+ Palms_Ambient
+ Palms_Hot
+ Wood_Ambient
+ Wood_Hot
+
+```{r}
+cmat=cbind(
+  "North vs South" = c(0, -1/3, 0, -1/3, 0, 1/2, 0, -1/3, 0, 1/2),
+  "North vs South 2" = c(0, 1/3, 0, -1/2, 0, 1/3, 0, -1/2, 0, 1/3),
+  "North vs South 3" = c(0, 0, 0, -1/2, 0, 1/2, 0, -1/2, 0, 1/2)
+)
+
+cmat=cbind(
+  "North vs South" = c(-1/3, -1/3, 1/2, -1/3, 1/2)
+)
+```
+
+```{r}
+bleach.em<- bleach.brm2 |>
+  emmeans(~Reef, type = 'response') |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(across(everything(), exp)) |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 1),
+            Pg = mean(.value > 1)
+            )
+bleach.em
+```
+
+```{r}
+bleach.plot<- bleach.brm2 %>%
+  emmeans(~Reef) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = Reef,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic() +
+  labs(x = "bleach", y = "Reef")
+bleach.plot
+```
+
+```{r}
+#saveRDS(bleach.plot, file = "data/adult.bleach.plot.2.rds")
+#bleach.plot <- readRDS("data/adult.bleach.plot.2.rds")
+```

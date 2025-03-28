@@ -1,0 +1,247 @@
+---
+title: "02_environment_data"
+author: "Alex Macadam"
+date: '2023-01-19'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggpubr)
+```
+
+Make plot of the environment data that was taken from the HOBO logger attached to the the deployment tables
+
+Load environment data
+```{r}
+table_1 <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/environmental_data_table_1.csv", header=T)
+table_2 <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/environmental_data_table_2.csv", header = T)
+dhw<- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/DHW_data_fantome.csv", header = T)
+```
+
+```{r}
+#combine data
+env_data <- rbind(table_1, table_2)
+```
+
+```{r}
+#change date time format table data
+env_data$Date_Time2 = as.POSIXct(env_data$Date_Time, format = '%d/%m/%Y %H:%M')
+env_data$Date = as.Date(env_data$Date_Time2, format ='%d-%m-%Y')
+```
+
+```{r}
+#change date time format DHW
+dhw$Date_time = as.POSIXct(dhw$time_UTC, format = '%Y-%m-%dT%H:%M:%SZ')
+dhw$Date = as.Date(dhw$Date_time, format ='%d-%m-%Y')
+```
+
+```{r}
+#factorise
+env_data <- env_data %>% mutate(Table = factor(Table))
+```
+
+```{r}
+#add mean SST column
+env_data<- env_data %>%
+  mutate(Mean_temp = 27.79)
+```
+
+```{r}
+glimpse(env_data)
+glimpse(dhw)
+```
+
+```{r}
+#summarise temp data
+max_daily_temp <- env_data %>%
+  group_by(Date) %>%
+  summarise(Av_temp = max(Temp_C))
+```
+
+```{r}
+#summarise lux data
+max_daily_lux <- env_data %>%
+  filter(Time >='11:14' & Time < '15:14') %>%
+  group_by(Date) %>%
+  summarise(Av_lux = max(Intensity_Lux))
+```
+
+```{r}
+#join datasets
+temp_lux<- dplyr::cross_join(max_daily_temp, max_daily_lux) %>% na.omit()
+glimpse(temp_lux)
+```
+
+```{r}
+#join datasets
+temp_lux_dhw<- dplyr::cross_join(temp_lux, dhw)
+temp_lux_dhw$BAA_MAX <- as.numeric(temp_lux_dhw$BAA_MAX)
+glimpse(temp_lux_dhw)
+```
+
+```{r}
+Temp_plot<- temp_lux_dhw %>% 
+  ggplot(aes(x=Date)) +
+  geom_line(aes(y=Av_temp), size=1, colour = "firebrick3") +
+  scale_y_continuous(limits=c(25,32), breaks=seq(25,32,1)) +
+  #scale_color_manual(values=c('goldenrod2', 'firebrick4'), name="", guide=FALSE) +
+  labs(x='Date', y="Temperature (°C)") +
+  theme_pubr(base_size = 10) +
+  theme(legend.key.height = unit(0.3, "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,0,0),
+        plot.margin = margin(rep(0.5,4)))
+```
+
+```{r}
+DHW_plot<- temp_lux_dhw %>% 
+  ggplot(aes(x=Date)) +
+  geom_area(aes(y=DHW_Celsius_weeks), size=1, fill = "#F7931E", alpha = 0.4) +
+  #scale_color_manual(values=c('goldenrod2', 'firebrick4'), name="", guide=FALSE) +
+  scale_y_continuous(position = "right") +
+  labs(x='Date', y="Degree heating weeks") +
+  theme_pubr(base_size = 10) +
+  theme(legend.key.height = unit(0.3, "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,0,0),
+        plot.margin = margin(rep(0.5,4)))
+DHW_plot
+```
+
+```{r}
+DHW_plot<- temp_lux_dhw %>% 
+  ggplot(aes(x=Date)) +
+  geom_col(aes(y=DHW_Celsius_weeks), size=1, color = "black", fill = "#F7931E", alpha = 0.4) +
+  #scale_color_manual(values=c('goldenrod2', 'firebrick4'), name="", guide=FALSE) +
+  scale_y_continuous(position = "right") +
+  labs(x='Date', y="Degree heating weeks") +
+  theme_pubr(base_size = 10) +
+  theme(legend.key.height = unit(0.3, "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,0,0),
+        plot.margin = margin(rep(0.5,4)))
+DHW_plot
+```
+
+```{r}
+dual_plot <- function(data, x, y_left, y_right){
+  x <- ensym(x)
+  y_left <- ensym(y_left)
+  y_right <- ensym(y_right)
+
+  min_slope_ratio <- 1
+  ratio_model <- lm(eval(y_left) ~ eval(y_right), data = data)
+  ratio_slope <- ratio_model$coefficients[[2]]
+
+  if (ratio_model$coefficients[[2]] < min_slope_ratio) {
+    ratio_model <- lm(eval(y_left) ~ 1, data = data)
+    ratio_slope <- min_slope_ratio
+  }
+  ratio_intercept <- ratio_model$coefficients[[1]]
+
+
+  data %>%
+    select(!!x, !!y_left, !!y_right) %>%
+    mutate(!!y_right := !!y_right * ratio_slope + ratio_intercept) %>%
+    # mutate(!!y_right := predict(ratio_model)) %>%
+    gather(k, v, -!!x) %>%
+    ggplot() +
+    geom_line(aes(!!x, v, colour = k), size = 1) +
+    scale_y_continuous(sec.axis = sec_axis(~ . / ratio_slope -
+                                             ratio_intercept,
+                                           name = rlang::as_string(y_right))) +
+      theme_pubr(base_size = 10) +
+  theme(legend.key.height = unit(0.3, "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,0,0),
+        plot.margin = margin(rep(0.5,4))) +
+    labs(y = rlang::as_string(y_left))
+}
+```
+
+```{r}
+temp_lux_dhw %>% 
+  dual_plot(Date, Av_temp, DHW_Celsius_weeks) + labs(x= 'Date', y= "Temperature (°C)", y2= "Lux")
+```
+
+##############
+Collection site historical temperature data
+
+read in data
+```{r}
+env.data <- read.csv('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/collection_site_env_data.csv', header=T, fileEncoding="UTF-8-BOM")
+env.data <- env.data  %>% mutate(Reef = factor(Reef, levels=c("Wood","Martin","Arlington","Fantome Is.","Davies")))
+```
+
+change date:time to date
+```{r}
+env.data <- env.data %>% mutate(time = as_date(time)) %>%
+  rename(Date = time)
+#create month and year columns
+env.data$Month = substring(env.data$Date, 6, 7)
+env.data$Year = substring(env.data$Date, 1, 4)
+glimpse(env.data)
+```
+
+Create colour palette (extend Brewer Dark2)
+```{r}
+pal2 <- c("#E76F51", "#F4A261", "#E9C46A", "#8AB17D", "#287271")
+cols = c("#E76F51", "#F4A261", "#E9C46A", "#8AB17D", "#287271")
+```
+
+rough plot
+```{r}
+SST_line<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021")) %>% group_by(Reef, Month) %>% summarise(meanSST = mean(SST))
+SST_line$Month <- as.numeric(SST_line$Month)
+SST_line_plot<- SST_line %>% ggplot(aes(x=Month, y=meanSST, color=Reef)) +
+  geom_line(aes(color=Reef), lwd=1) +
+  scale_color_manual(values=cols) +
+  #scale_color_brewer(palette="Spectral") +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(0, 12, 1)) +
+  scale_y_continuous(breaks = seq(22, 34, 1)) +
+  ylab("Mean SST (°C)")
+SST_line_plot
+```
+
+temp density plot
+```{r}
+SST_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% summarise(maxmeanSST = max(SST)) %>%
+ ggplot(aes(x=maxmeanSST, fill= Reef, color=Reef)) +
+  geom_density(alpha=0.3, lwd=1.2) +
+  scale_color_manual(values=cols) +
+  scale_fill_manual(values=cols) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(24, 34, 2)) +
+  scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
+  ylab("Density") + xlab("Mean SST (°C)")
+SST_density_plot
+```
+
+```{r}
+SST_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% summarise(maxmeanSST = max(SST)) %>%
+ ggplot(aes(x=maxmeanSST, fill= Reef, color=Reef)) +
+  geom_density(alpha=0.6, lwd=1.2) +
+  facet_wrap(~Reef) +
+  #scale_color_brewer(palette="Spectral") +
+  #scale_fill_brewer(palette="Spectral") +
+  scale_color_manual(values=cols) +
+  scale_fill_manual(values=cols) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(24, 34, 2)) +
+  scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
+  ylab("Density") + xlab("Mean SST (°C)")
+SST_density_plot
+```
+
+```{r}
+#library(patchwork)
+#SST_plot<- SST_line_plot / SST_density_plot + plot_annotation(tag_levels = 'A')
+#SST_plot
+```

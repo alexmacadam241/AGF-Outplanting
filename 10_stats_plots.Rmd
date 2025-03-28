@@ -1,0 +1,33 @@
+---
+title: "09_stats_plots"
+author: "Alex Macadam"
+date: "2023-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+adult.survival <- readRDS("data/adult.survival.hot.plot.rds")
+adult.bleach <- readRDS("data/adult.bleach.plot.2.rds")
+juv.survival.region <- readRDS("data/juv.survival.plot.region.rds")
+juv.survival.reef <- readRDS("data/juv.survival.plot.reef.rds")
+juv.growth.region <- readRDS("data/juv.growth.plot.region.rds")
+juv.growth.reef <- readRDS("data/juv.growth.plot.reef.rds")
+juv.colour.region <- readRDS("data/juv.colour.plot.region.rds")
+juv.colour.reef <- readRDS("data/juv.colour.plot.reef.rds")
+plot_tradeoffs <- readRDS("data/juv.tradeoff.plot.rds")
+```
+
+```{r}
+library(patchwork)
+stat_plot<- adult.survival + adult.bleach + juv.survival.region + juv.growth.region + juv.colour.region + plot_layout(guides = 'collect')
+stat_plot
+```
+
+```{r}
+supp_plots<- juv.survival.reef + juv.growth.reef + juv.colour.reef + plot_layout(guides = 'collect', ncol = 2)
+```
+

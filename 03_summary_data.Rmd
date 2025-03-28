@@ -1,0 +1,157 @@
+---
+title: "03_summary_data"
+author: "Alex Macadam"
+date: "2023-11-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Survival statistics
+```{r}
+library(tidyverse) #for data wrangling
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(effects)   #for partial effects plots
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist)   #for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+library(easystats)     #framework for stats, modelling and visualisation
+library(patchwork)
+source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
+```
+
+```{r}
+#load data
+survival <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_survival_binary.csv", header=T, fileEncoding="UTF-8-BOM")
+
+size <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_size.csv", header=T, fileEncoding="UTF-8-BOM")
+
+colour <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_colour.csv", header=T, fileEncoding="UTF-8-BOM")
+```
+
+```{r}
+#change catagorical columns to factors and remove NAs
+survival <- survival |>
+  mutate(Family = factor(Family),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Survival != "NA")
+
+#change catagorical columns to factors and remove NAs
+size <- size |>
+  mutate(Family = factor(Family),
+         Timepoint = factor(Timepoint),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Area != "NA")
+
+#change catagorical columns to factors and remove NAs
+colour <- colour |>
+  mutate(Family = factor(Family),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(ColEndCor != "NA")
+```
+
+```{r}
+growth<- size %>% filter(Timepoint %in% c("T0","T1")) %>% dplyr::select(Family, Timepoint, popcross, Area, IndID, Cone, RegionCross, Rack, DeviceNo) %>%
+  pivot_wider(names_from = Timepoint, values_from = Area) %>%
+  tidyr::unnest() %>%
+  mutate(Growth = ((`T1` - `T0`)/`T0`)*100) %>%
+  drop_na(Growth)
+```
+
+```{r}
+colour<- colour |>
+  mutate(ColEndCor2 = (100-(ColEndCor / 255)*100))
+```
+
+```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
+surv_sum <- summarySE(survival, measurevar="Survival",
+                     groupvars=c("popcross"), na.rm=TRUE)
+```
+
+```{r}
+growth_sum <- summarySE(growth, measurevar="Growth",
+                     groupvars=c("popcross"), na.rm=TRUE)
+```
+
+```{r}
+colour_sum <- summarySE(colour, measurevar="ColEndCor2",
+                     groupvars=c("popcross"), na.rm=TRUE)
+```
+

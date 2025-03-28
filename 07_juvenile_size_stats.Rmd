@@ -1,0 +1,452 @@
+---
+title: "07_juvenile_size_stats"
+author: "Alex Macadam"
+date: "2023-10-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##growth statistics
+```{r}
+library(tidyverse) #for data wrangling
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(effects)   #for partial effects plots
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(brms)
+library(broom.mixed)
+library(tidybayes)
+library(bayesplot)
+#library(standist)   #for visualizing distributions
+library(rstanarm)
+library(ggeffects)
+library(rstan)
+library(DHARMa)
+library(ggridges)
+library(easystats)     #framework for stats, modelling and visualisation
+library(patchwork)
+source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
+```
+
+```{r}
+#load data
+size <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_size.csv", header=T, fileEncoding="UTF-8-BOM")
+```
+
+```{r}
+#change catagorical columns to factors and remove NAs
+size <- size |>
+  mutate(Family = factor(Family),
+         Timepoint = factor(Timepoint),
+         Cone = factor(Cone),
+         Cross = factor(Cross),
+         popcross = factor(popcross, levels = c('PIxPI', 'DAxDA', 'DAxAR', 'DAxMA', 'MAxDA', 'MAxMA', 'WDxMA')),
+         RegionCross = factor(RegionCross),
+         Breed = factor(Breed),
+         Rack = factor(Rack),
+         DeviceNo = factor(DeviceNo)
+         ) |>
+  filter(Area != "NA")
+```
+
+Check all entries are unique
+```{r}
+size %>% filter(Timepoint == "T1") |>
+  dplyr::group_by(Cross, Rack, DevicePos, DeviceNo, IndID, popcross) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n > 1L)
+```
+
+```{r}
+growth<- size %>% filter(Timepoint %in% c("T0","T1")) %>% dplyr::select(Family, Timepoint, popcross, Area, IndID, Cone, RegionCross, Rack, DeviceNo) %>%
+  pivot_wider(names_from = Timepoint, values_from = Area) %>%
+  tidyr::unnest() %>%
+  mutate(Growth = ((`T1` - `T0`)/`T0`)*100) %>%
+  drop_na(Growth)
+```
+
+# Fit the model
+## Random intercept
+form
+```{r}
+growth.form <- bf(Growth ~ popcross + (1|Rack),
+                     family = gaussian()
+                   )
+```
+
+```{r}
+growth |>
+group_by(popcross) |>
+summarise(
+mean(Growth),
+median(Growth),
+sd(Growth),
+mad(Growth)
+)
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors<- prior("normal(250, 100)", class = "Intercept") +
+    prior("normal(0, 200)", class = "b") +
+    prior("normal(0, 130)", class = "sd", group = "Rack") +
+   # prior("normal(0, 130)", class = "sd", group = "Timepoint") +
+    prior(student_t(3, 0, 140), class = 'sigma') +
+    prior(cauchy(0,2.5), class = 'sd')
+```
+
+run model
+```{r}
+growth.brm2 <- brm(growth.form, 
+                  data = growth,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(growth.brm2, file = "data/juv.growth.brm2.rds")
+growth.brm2 <- readRDS("data/juv.growth.brm2.rds")
+```
+
+conditional effects
+```{r}
+growth.brm2 %>%
+    conditional_effects("popcross") %>%
+    plot(points = TRUE)
+```
+
+```{r}
+growth.brm2 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+growth.brm2$fit |> stan_trace()
+```
+
+```{r}
+growth.brm2$fit |> stan_ac()
+```
+
+```{r}
+growth.brm2$fit |> stan_rhat()
+```
+
+```{r}
+growth.brm2$fit |> stan_ess()
+```
+
+```{r}
+growth.brm2 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+growth.resids<- make_brms_dharma_res(growth.brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(growth.resids)) +
+wrap_elements(~plotResiduals(growth.resids, form = factor(rep(1,nrow(growth))))) +
+wrap_elements(~plotResiduals(growth.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(growth.resids))
+
+testUniformity(growth.resids)
+plotResiduals(growth.resids, form = factor(rep(1,nrow(growth))))
+plotResiduals(growth.resids, quantreg = FALSE)
+testDispersion(growth.resids)
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+growth.brm2 |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 0),
+    Pg = ~mean(.x > 0),
+    rhat,
+    ess_bulk
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+growth.brm2 |>
+  emmeans(~popcross) |>
+  pairs()
+```
+
+Planned contrast:
+PIxPI
+DAxDA 
+DAxAR     
+DAxMA              
+MAxDA         
+MAxMA              
+WDxMA   
+
+```{r}
+cmat=cbind(
+  "Pure vs Hybrid" = c(-1/3, -1/3, 1/4, 1/4, 1/4, -1/3, 1/4),
+  "PureCentral vs Hybrid" = c(-1/2, -1/2, 1/3, 1/3, 1/3, 0, 0),
+  "PureCentral vs Hybrid 2" = c(-1/2, -1/2, 1/4, 1/4, 1/4, 0, 1/4),
+  "PureNorth vs Hybrid" = c(0, 0, 1/3, 1/3, 1/3, -1, 0),
+  "PureNorth vs Hybrid2" = c(0, 0, 1/3, 1/3, 1/3, -1/2, -1/2),
+  "Palms vs Davies" = c(1, -1, 0, 0, 0, 0, 0),
+  "MARmom vs MARdad" = c(0, 0, 0, 1, -1, 0, 0),
+  "PureCentral vs PureNorth" = c(-1/2, -1/2, 0, 0, 0, 1/2, 1/2),
+  "PureCentral vs PureNorth2" = c(-1/2, -1/2, 0, 0, 0, 1, 0),
+  "PIxPI vs hybrids" = c(-1, 0, 1/3, 1/3, 1/3, 0, 0)
+)
+```
+
+
+odds scale:
+```{r}
+growth.em<- growth.brm2 |>
+  emmeans(~popcross) |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+#on odds ratio scale
+  summarise(median_hdci(.value),
+            Pl = mean(.value < 0),
+            Pg = mean(.value > 0)
+            )
+growth.em
+```
+  "Pure vs Hybrid": y = 10.538. There is no evidence that Hybrids have higher growth rate than pure juveniles (Pg = 0.859)
+  
+  "PureCentral vs Hybrid": y = -5.139. There is no evidence that PureCentrals have higher growth rate than hybrid juveniles (Pl = 0.664)
+  "PureCentral vs Hybrid 2": y = 1.392. There is no evidence that PureCentrals have higher growth rate than hybrid juveniles (Pg = 0.559) 
+  
+  "PureNorth vs Hybrid": y = 23.096. Hybrids have 23% higher growth rate than pure north juveniles (Pg = 0.966)
+  "PureNorth vs Hybrid2": y = -1.278. There is no evidence that hybrids have higher growth rate than PureNorth juveniles (Pl = 0.531)
+  
+  "Palms vs Davies": y = -46.838. Palms has 46.8% higher growth rate than Davies (Pl = 1.000)
+  
+  "PureCentral vs PureNorth": y = -4.008. There is no evidence that PureCentrals have higher growth rate than PureNorth juveniless (Pl = 0.653)
+  "PureCentral vs PureNorth2": y = -27.811. PureCentral have 27.8% higher growth rate than PureNorth juveniles (Pg = 0.999)
+  
+  "MARmom vs MARdad": y = -10.130. There is no evidence that Hybrids have higher growth rate than pure juveniles (Pg = 0.645)
+  
+#Plot
+get variables
+```{r}
+growth.brm2 %>% get_variables()
+```
+
+```{r}
+growth.plot<- growth.brm2 %>%
+  emmeans(~popcross) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = popcross,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic()+
+  labs(x = "Growth (%)", y = "Population Cross")
+growth.plot
+```
+
+```{r}
+#saveRDS(growth.plot, file = "data/juv.growth.plot.reef.rds")
+growth.plot <- readRDS("data/juv.growth.plot.reef.rds")
+```
+
+##############
+# Fit the model
+## Random intercept
+form
+```{r}
+growth.form <- bf(Growth ~ RegionCross + (1|Rack),
+                     family = gaussian()
+                   )
+```
+
+```{r}
+growth |>
+group_by(popcross) |>
+summarise(
+mean(Growth),
+median(Growth),
+sd(Growth),
+mad(Growth)
+)
+```
+
+priors
+```{r fitModel2h1, results='markdown', eval=TRUE, mhidden=TRUE, cache=TRUE}
+priors<- prior("normal(250, 100)", class = "Intercept") +
+    prior("normal(0, 200)", class = "b") +
+    prior("normal(0, 130)", class = "sd", group = "Rack") +
+   # prior("normal(0, 130)", class = "sd", group = "Timepoint") +
+    prior(student_t(3, 0, 140), class = 'sigma') +
+    prior(cauchy(0,2.5), class = 'sd')
+```
+
+run model
+```{r}
+growth.brm3 <- brm(growth.form, 
+                  data = growth,
+                  prior = priors,
+                  sample_prior = 'yes',
+                  iter = 5000,
+                  warmup = 2500,
+                  chains = 3, cores = 3,
+                  thin = 5,
+                  control = list(adapt_delta = 0.99, max_treedepth = 20),
+                  refresh = 0,
+                  backend = "rstan"
+                  )
+```
+
+```{r}
+#saveRDS(growth.brm3, file = "data/juv.growth.brm3.rds")
+#growth.brm3 <- readRDS("data/juv.growth.brm3.rds")
+```
+
+conditional effects
+```{r}
+growth.brm3 %>%
+    conditional_effects("popcross") %>%
+    plot(points = TRUE)
+```
+
+```{r}
+growth.brm3 %>% SUYR_prior_and_posterior()
+```
+
+```{r}
+growth.brm3$fit |> stan_trace()
+```
+
+```{r}
+growth.brm3$fit |> stan_ac()
+```
+
+```{r}
+growth.brm3$fit |> stan_rhat()
+```
+
+```{r}
+growth.brm3$fit |> stan_ess()
+```
+
+```{r}
+growth.brm3 |> pp_check(type = 'dens_overlay', nsamples = 250)
+```
+
+Dharma residuals
+```{r}
+growth.resids<- make_brms_dharma_res(growth.brm3, integerResponse = FALSE)
+wrap_elements(~testUniformity(growth.resids)) +
+wrap_elements(~plotResiduals(growth.resids, form = factor(rep(1,nrow(growth))))) +
+wrap_elements(~plotResiduals(growth.resids, quantreg = FALSE))+
+wrap_elements(~testDispersion(growth.resids))
+
+testUniformity(growth.resids)
+plotResiduals(growth.resids, form = factor(rep(1,nrow(growth))))
+plotResiduals(growth.resids, quantreg = FALSE)
+testDispersion(growth.resids)
+```
+
+Summarise model
+back transform from logit scale: by exponentiating on the odds scale. comparing to 1
+```{r}
+growth.brm3 |>
+  summarise_draws(
+    median,
+    HDInterval::hdi,
+    Pl = ~mean(.x < 0),
+    Pg = ~mean(.x > 0),
+    rhat,
+    ess_bulk
+    ) |>
+  knitr::kable()
+```
+
+Probability scale
+```{r}
+growth.brm3 |>
+  emmeans(~RegionCross) |>
+  pairs()
+```
+
+Planned contrast:
+CentralxCentral
+Hybrid
+NorthxNorth
+
+```{r}
+cmat=cbind(
+  "Central vs North" = c(-1, 0, 1),
+  "Central vs Hybrid" = c(-1, 1, 0),
+  "North vs Hybrid" = c(0, 1, -1)
+)
+```
+
+
+odds scale:
+```{r}
+growth.em<- growth.brm3 |>
+  emmeans(~RegionCross) |>
+  contrast(method=list(cmat)) |>
+  gather_emmeans_draws() |>
+#on odds ratio scale
+  dplyr::summarise(median_hdci(.value),
+            Pl = mean(.value < 0),
+            Pg = mean(.value > 0)
+            )
+growth.em
+```
+
+#Plot
+get variables
+```{r}
+growth.brm3 %>% get_variables()
+```
+
+```{r}
+growth.plot<- growth.brm3 %>%
+  emmeans(~RegionCross) %>%
+  gather_emmeans_draws() %>%
+    ggplot() +
+  #geom_vline(xintercept = 0, linetype = "dashed") +
+  stat_slab(aes(
+    x = .value, y = RegionCross,
+    fill = stat(ggdist::cut_cdf_qi(cdf,
+      .width = c(0.5, 0.8, 0.95),
+      labels = scales::percent_format()
+    ))
+  ), color = "black") +
+  scale_fill_brewer("Interval", direction = -1, na.translate = FALSE) +
+  theme_classic()+
+  labs(x = "Growth (%)", y = "Population Cross")
+growth.plot
+```
+
+```{r}
+#saveRDS(growth.plot, file = "data/juv.growth.plot.region.rds")
+growth.plot <- readRDS("data/juv.growth.plot.region.rds")
+```
