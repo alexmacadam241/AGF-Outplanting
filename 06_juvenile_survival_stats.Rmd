@@ -96,7 +96,7 @@ surv.sum.reef.se <- summarySE(survival, measurevar="Survival",
                           groupvars=c("popcross"), na.rm=TRUE)
 
 surv.sum.region.se <- summarySE(survival, measurevar="Survival",
-                          groupvars=c("Breed"), na.rm=TRUE)
+                          groupvars=c("RegionCross"), na.rm=TRUE)
 
 surv.sum.se <- survival|>
   dplyr::filter(Breed %in% c("Hybrid","CentralPure")) |>
@@ -150,8 +150,8 @@ survival.brm2 <- brm(survival.form,
 ```
 
 ```{r}
-#saveRDS(survival.brm2, file = "juv.survival.brm2.rds")
-survival.brm2 <- readRDS("juv.survival.brm2.rds")
+#saveRDS(survival.brm2, file = "data/juv.survival.brm2.rds")
+survival.brm2 <- readRDS("data/juv.survival.brm2.rds")
 ```
 
 conditional effects
@@ -230,7 +230,7 @@ WDxMA
 ```{r}
 cmat=cbind(
   "Pure vs Hybrid" = c(-1/3, -1/3, 1/4, 1/4, 1/4, -1/3, 1/4),
-  "PureCentral vs Hybrid" = c(-1/2, -1/2, 1/3, 1/3, 1/3, 0, 0),
+  "PureCentral vs Hybrid" = c(-1/3, -1/3, -1/3, 1/3, 1/3, 0, 0),
   "PureCentral vs Hybrid 2" = c(-1/2, -1/2, 1/4, 1/4, 1/4, 0, 1/4),
   "PureNorth vs Hybrid" = c(0, 0, 1/3, 1/3, 1/3, -1, 0),
   "PureNorth vs Hybrid2" = c(0, 0, 1/3, 1/3, 1/3, -1/2, -1/2),
@@ -338,7 +338,7 @@ survival.brm3 <- brm(survival.form,
 
 ```{r}
 #saveRDS(survival.brm3, file = "data/juv.survival.brm3.rds")
-#survival.brm3 <- readRDS("data/juv.survival.brm3.rds")
+survival.brm3 <- readRDS("data/juv.survival.brm3.rds")
 ```
 
 conditional effects

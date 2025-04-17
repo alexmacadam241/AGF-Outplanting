@@ -37,6 +37,46 @@ source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
 ```
 
 ```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
 #load data
 size <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_size.csv", header=T, fileEncoding="UTF-8-BOM")
 ```
@@ -66,11 +106,31 @@ size %>% filter(Timepoint == "T1") |>
 ```
 
 ```{r}
+size.sum.reef.se <- summarySE(size, measurevar="Area",
+                          groupvars=c("popcross"), na.rm=TRUE)
+
+size.sum.region.se <- summarySE(size, measurevar="Area",
+                          groupvars=c("RegionCross"), na.rm=TRUE)
+```
+
+```{r}
 growth<- size %>% filter(Timepoint %in% c("T0","T1")) %>% dplyr::select(Family, Timepoint, popcross, Area, IndID, Cone, RegionCross, Rack, DeviceNo) %>%
   pivot_wider(names_from = Timepoint, values_from = Area) %>%
   tidyr::unnest() %>%
   mutate(Growth = ((`T1` - `T0`)/`T0`)*100) %>%
   drop_na(Growth)
+```
+
+```{r}
+growth.sum.reef.se <- summarySE(growth, measurevar="Growth",
+                          groupvars=c("popcross"), na.rm=TRUE)
+
+growth.sum.region.se <- summarySE(growth, measurevar="Growth",
+                          groupvars=c("RegionCross"), na.rm=TRUE)
+
+growth<- growth |> mutate(species = "hya")
+growth.sum.se <- summarySE(growth, measurevar="Growth",
+                          groupvars=c("species"), na.rm=TRUE)
 ```
 
 # Fit the model
@@ -223,7 +283,7 @@ growth.em<- growth.brm2 |>
   contrast(method=list(cmat)) |>
   gather_emmeans_draws() |>
 #on odds ratio scale
-  summarise(median_hdci(.value),
+  dplyr::summarise(median_hdci(.value),
             Pl = mean(.value < 0),
             Pg = mean(.value > 0)
             )
@@ -323,7 +383,7 @@ growth.brm3 <- brm(growth.form,
 
 ```{r}
 #saveRDS(growth.brm3, file = "data/juv.growth.brm3.rds")
-#growth.brm3 <- readRDS("data/juv.growth.brm3.rds")
+growth.brm3 <- readRDS("data/juv.growth.brm3.rds")
 ```
 
 conditional effects

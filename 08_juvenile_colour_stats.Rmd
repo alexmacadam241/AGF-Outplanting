@@ -37,6 +37,46 @@ source('/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/helperFunctions.R')
 ```
 
 ```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
+```{r}
 #load data
 colour <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juvenile_colour.csv", header=T, fileEncoding="UTF-8-BOM") |>
     mutate(Family = factor(Family),
@@ -54,6 +94,22 @@ colour <- read.csv("/Users/alexmacadam/Documents/GitHub/AGF-Outplanting/data/juv
 ```{r}
 colour<- colour |>
   mutate(ColEndCor2 = (100-(ColEndCor / 255)*100))
+```
+
+```{r}
+colour.sum.reef.se <- summarySE(colour, measurevar="ColEndCor2",
+                          groupvars=c("popcross"), na.rm=TRUE)
+
+colour.sum.region.se <- summarySE(colour, measurevar="ColEndCor2",
+                          groupvars=c("RegionCross"), na.rm=TRUE)
+
+colour<- colour |> mutate(species = "hya")
+colour.sum.se <- summarySE(colour, measurevar="ColEndCor2",
+                          groupvars=c("species"), na.rm=TRUE)
+
+colour|>
+  ggplot() +
+  geom_boxplot(aes(x=popcross, y=GreyEnd))
 ```
 
 Check all entries are unique
@@ -76,6 +132,10 @@ colour %>%
 form
 ```{r}
 colour.form <- bf(ColEndCor2 ~ popcross + (1|Rack),
+                     family = gaussian()
+                   )
+
+colour.form <- bf(GreyEndCorrection ~ popcross + (1|Rack),
                      family = gaussian()
                    )
 ```
@@ -217,7 +277,7 @@ colour.brm2 |>
   emmeans(~popcross) |>
   contrast(method=list(cmat)) |>
   gather_emmeans_draws() |>
-  summarise(median_hdci(.value),
+  dplyr::summarise(median_hdci(.value),
             Pl = mean(.value < 0),
             Pg = mean(.value > 0)
             )
@@ -268,8 +328,8 @@ colour.plot <- readRDS("data/juv.colour.plot.reef.rds")
 ```
 
 #############
+Region cross
 # Fit the model
-## Random intercept
 form
 ```{r}
 colour.form <- bf(ColEndCor2 ~ RegionCross + (1|Rack),
