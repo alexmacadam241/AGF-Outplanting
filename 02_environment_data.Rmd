@@ -15,6 +15,46 @@ library(lubridate)
 library(ggpubr)
 ```
 
+```{r}
+# Function for summarising survival standard error
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  require(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm==TRUE) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Commenting this rename mean column line, as not assigning measurevar name properly
+  # # Rename the "mean" column    
+  # datac <- rename(datac, measurevar = mean)
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+```
+
 Make plot of the environment data that was taken from the HOBO logger attached to the the deployment tables
 
 Load environment data
@@ -200,6 +240,13 @@ Create colour palette (extend Brewer Dark2)
 ```{r}
 pal2 <- c("#E76F51", "#F4A261", "#E9C46A", "#8AB17D", "#287271")
 cols = c("#E76F51", "#F4A261", "#E9C46A", "#8AB17D", "#287271")
+```
+
+```{r}
+#max SST per month
+SST_max<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021")) %>% group_by(Reef, Month) %>% dplyr::summarise(maxSST = max(SST))
+SST.max.se <- summarySE(env.data, measurevar="SST",
+                          groupvars=c("Reef", "Month"), na.rm=TRUE)
 ```
 
 rough plot
