@@ -32,6 +32,7 @@ summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
   datac <- ddply(data, groupvars, .drop=.drop,
                  .fun = function(xx, col) {
                    c(N    = length2(xx[[col]], na.rm=na.rm),
+                     max = max   (xx[[col]], na.rm=na.rm),
                      mean = mean   (xx[[col]], na.rm=na.rm),
                      sd   = sd     (xx[[col]], na.rm=na.rm)
                    )
@@ -84,6 +85,12 @@ dhw$Date = as.Date(dhw$Date_time, format ='%d-%m-%Y')
 ```{r}
 #factorise
 env_data <- env_data %>% mutate(Table = factor(Table))
+```
+
+```{r}
+#mean SST over deployment
+mean_SST <- summarySE(env_data, measurevar="Temp_C",
+                     groupvars=c("Date"), na.rm=TRUE)
 ```
 
 ```{r}
@@ -213,8 +220,9 @@ dual_plot <- function(data, x, y_left, y_right){
 ```
 
 ```{r}
-temp_lux_dhw %>% 
-  dual_plot(Date, Av_temp, DHW_Celsius_weeks) + labs(x= 'Date', y= "Temperature (°C)", y2= "Lux")
+#temp_lux_dhw %>% 
+#  dual_plot(Date, Av_temp, DHW_Celsius_weeks) + 
+#  labs(x= 'Date', y= "Temperature (°C)", y2= "Lux")
 ```
 
 ##############
@@ -244,9 +252,12 @@ cols = c("#E76F51", "#F4A261", "#E9C46A", "#8AB17D", "#287271")
 
 ```{r}
 #max SST per month
-SST_max<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021")) %>% group_by(Reef, Month) %>% dplyr::summarise(maxSST = max(SST))
+SST_max<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021")) %>% 
+  group_by(Reef, Month) %>% 
+  dplyr::summarise(maxSST = max(SST))
+
 SST.max.se <- summarySE(env.data, measurevar="SST",
-                          groupvars=c("Reef", "Month"), na.rm=TRUE)
+                          groupvars=c("Reef", "Month", "Year"), na.rm=TRUE)
 ```
 
 rough plot
@@ -266,7 +277,8 @@ SST_line_plot
 
 ```{r}
 #SST density
-SST_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% dplyr::summarise(maxmeanSST = max(SST)) %>%
+SST_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% 
+  dplyr::summarise(maxmeanSST = max(SST)) %>%
  ggplot(aes(x=maxmeanSST, fill= Reef, color=Reef)) +
   geom_density(alpha=0.2, lwd=1.2) +
   #facet_wrap(~Reef) +
@@ -282,8 +294,27 @@ SST_density_plot
 ```
 
 ```{r}
+#SST anomaly density
+SSTanom_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% 
+  dplyr::summarise(maxmeanSSTanom = max(SST_ANOMALY)) %>%
+ ggplot(aes(x=maxmeanSSTanom, fill= Reef, color=Reef)) +
+  geom_density(alpha=0.2, lwd=1.2) +
+  #facet_wrap(~Reef) +
+  #scale_color_brewer(palette="Spectral") +
+  #scale_fill_brewer(palette="Spectral") +
+  scale_color_manual(values=cols) +
+  scale_fill_manual(values=cols) +
+  theme_classic() +
+  #scale_x_continuous(breaks = seq(24, 34, 2)) +
+  #scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
+  ylab("Density") + xlab("Mean SST anomaly (°C)")
+SSTanom_density_plot
+```
+
+```{r}
 #DHW density
-DHW_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% dplyr::summarise(maxmeanDHW = max(BAA)) %>%
+DHW_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% 
+  dplyr::summarise(maxmeanDHW = max(DHW)) %>%
  ggplot(aes(x=maxmeanDHW, fill= Reef, color=Reef)) +
   geom_density(alpha=0.2, lwd=1.2) +
   #facet_wrap(~Reef) +
@@ -292,12 +323,35 @@ DHW_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","
   scale_color_manual(values=cols) +
   scale_fill_manual(values=cols) +
   theme_classic() +
-  scale_x_continuous(breaks = seq(24, 34, 2)) +
-  scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
-  ylab("Density") + xlab("Mean DHW (°C)")
+  #scale_x_continuous(breaks = seq(24, 34, 2)) +
+  #scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
+  ylab("Density") + xlab("Mean DHW")
 DHW_density_plot
 ```
+```{r}
+#BAA density
+BAA_density_plot<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","2021"))%>% group_by(Reef, Month) %>% dplyr::summarise(maxmeanDHW = max(BAA)) %>%
+ ggplot(aes(x=maxmeanDHW, fill= Reef, color=Reef)) +
+  geom_density(alpha=0.2, lwd=1.2) +
+  #facet_wrap(~Reef) +
+  #scale_color_brewer(palette="Spectral") +
+  #scale_fill_brewer(palette="Spectral") +
+  scale_color_manual(values=cols) +
+  scale_fill_manual(values=cols) +
+  theme_classic() +
+  #scale_x_continuous(breaks = seq(24, 34, 2)) +
+  #scale_y_continuous(breaks = seq(0, 0.2, 0.1)) +
+  ylab("Density") + xlab("Mean BAA level")
+BAA_density_plot
+```
 
+```{r}
+library(patchwork)
+temp_plot<- SST_density_plot + SSTanom_density_plot + DHW_density_plot + BAA_density_plot + plot_annotation(tag_levels = 'A') + plot_layout(guides = "collect")
+temp_plot
+```
+
+Statistics
 ```{r}
 #SST
 #check normality
@@ -434,10 +488,4 @@ kruskal_result
 library(FSA)
 dunn_test <- dunnTest(HOTSPOT ~ Reef, data = env.data, method = "bonferroni")
 dunn_test_HOTSPOT<- dunn_test$res
-```
-
-```{r}
-library(patchwork)
-temp_plot<- SST_density_plot + DHW_density_plot + plot_annotation(tag_levels = 'A') + plot_layout(guides = "collect")
-temp_plot
 ```

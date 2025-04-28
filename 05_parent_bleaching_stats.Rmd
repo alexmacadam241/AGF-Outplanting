@@ -121,6 +121,13 @@ bleaching$reefxtemp <- paste(bleaching$Reef, bleaching$Temp, sep='_')
 bleaching$reefxtemp <- as.factor(bleaching$reefxtemp)
 ```
 
+```{r}
+col_sum <- summarySE(colour, measurevar="CalibratedMeanGrey",
+                     groupvars=c("Temp","Reef"), na.rm=TRUE)
+
+bleach_sum <- summarySE(bleaching, measurevar="Bleaching",
+                     groupvars=c("Temp","Reef"), na.rm=TRUE)
+```
 
 ##############################################
 Colour Stats
