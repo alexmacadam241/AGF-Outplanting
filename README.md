@@ -14,3 +14,4 @@ R code to accompany the paper
 - Juvenile colour bayesian statistics [08_juvenile_colour_stats.Rmd](08_juvenile_colour_stats.Rmd)
 - Juvenile trade-offs [09_tradeoff_plot.Rmd](09_tradeoff_plot.Rmd)
 - Statistics plot [10_stats_plots.Rmd](10_stats_plots.Rmd)
+- Statistics plot [10_stats_plots.Rmd](10_stats_plots.Rmd)
