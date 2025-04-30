@@ -206,22 +206,29 @@ Wood
 
 ```{r}
 cmat=cbind(
-  "North vs South" = c( 0, 0, 0, 0, 0, -1/3, -1/3, -1/3, 1/2, 1/2)
+  "South vs North" = c( 0, 0, 0, 0, 0, 1/3, 1/3, 1/3, -1/2, -1/2)
 )
 ```
 
 ```{r}
-survival.em<- survival.brm2 |>
-  emmeans(~Reef * Temp, type = 'response') |>
-  contrast(method=list(cmat)) |>
+survival.em <- survival.brm2 |>
+  emmeans(~Reef * Temp) |>  # default is on link (log-odds) scale
+  contrast(method = list(cmat)) |>
   gather_emmeans_draws() |>
-  mutate(across(everything(), exp)) |>
-#on odds ratio scale
-  dplyr::summarise(median_hdci(.value),
-            Pl = mean(.value < 1),
-            Pg = mean(.value > 1)
-            )
+  mutate(or = exp(.value)) |>  # this gives odds ratios
+  dplyr::summarise(
+    median_hdci(or),
+    Pl = mean(or < 1),
+    Pg = mean(or > 1)
+  )
 survival.em
+```
+
+```{r}
+#South vs North:
+1/5.962686
+# = 0.1677097. meaning ~0.2× the survival odds of Central OR 118% higher odds of survival
+
 ```
 
 ```{r}
@@ -318,6 +325,33 @@ wrap_elements(~testUniformity(survival.resids)) +
 wrap_elements(~plotResiduals(survival.resids, form = factor(rep(1,nrow(survival))))) +
 wrap_elements(~plotResiduals(survival.resids, quantreg = FALSE))+
 wrap_elements(~testDispersion(survival.resids))
+```
+
+```{r}
+cmat=cbind(
+  "Central vs North" = c(1/3, 1/3, 1/3, -1/2, -1/2)
+)
+```
+
+```{r}
+survival.em <- survival.brm2 |>
+  emmeans(~Reef) |>  # default is on link (log-odds) scale
+  contrast(method = list(cmat)) |>
+  gather_emmeans_draws() |>
+  mutate(or = exp(.value)) |>  # this gives odds ratios
+  dplyr::summarise(
+    median_hdci(or),
+    Pl = mean(or < 1),
+    Pg = mean(or > 1)
+  )
+survival.em
+```
+
+```{r}
+#South vs North:
+1/0.2669121
+# = 3.746552. meaning ~3.75× the survival odds of Central OR 275% higher odds of survival
+
 ```
 
 ```{r}

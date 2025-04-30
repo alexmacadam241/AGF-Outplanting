@@ -258,6 +258,11 @@ SST_max<- env.data %>% filter(Year %in% c("2016","2017","2018","2019","2020","20
 
 SST.max.se <- summarySE(env.data, measurevar="SST",
                           groupvars=c("Reef", "Month", "Year"), na.rm=TRUE)
+
+MMM<- SST.max.se |>
+  dplyr::select(Reef, Month, Year, mean) |>
+  pivot_wider(names_from = Year, values_from = mean) |>
+  mutate_if(is.numeric, round, digits = 2)
 ```
 
 rough plot

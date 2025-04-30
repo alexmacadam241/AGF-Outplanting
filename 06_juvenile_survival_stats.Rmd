@@ -245,32 +245,18 @@ cmat=cbind(
 ```
 
 ```{r}
-survival.em<- survival.brm2 |>
-  emmeans(~popcross, type = 'response') |>
-  contrast(method=list(cmat)) |>
+survival.em <- survival.brm3 |>
+  emmeans(~RegionCross) |>  # default is on link (log-odds) scale
+  contrast(method = list(cmat)) |>
   gather_emmeans_draws() |>
-  mutate(across(everything(), exp)) |>
-#on odds ratio scale
-  dplyr::summarise(median_hdci(.value),
-            Pl = mean(.value < 1),
-            Pg = mean(.value > 1)
-            )
+  mutate(or = exp(.value)) |>  # this gives odds ratios
+  dplyr::summarise(
+    median_hdci(or),
+    Pl = mean(or < 1),
+    Pg = mean(or > 1)
+  )
 survival.em
 ```
-  "Pure vs Hybrid": y = 4.119. Hybrid has 311% higher odds of survival than pure juveniles (Pg = 1.000)
-  
-  "PureCentral vs Hybrid": y = 5.622. Hybrids have 462% higher odds of survival than pure central juveniles (Pg = 1.000)
-  "PureCentral vs Hybrid 2": y = 5.060. Hybrids have 406% higher odds of survival than pure central juveniles (Pg = 1.000) 
-  
-  "PureNorth vs Hybrid": y = 3.019. Hybrids have 201% higher odds of survival than pure central juveniles (Pg = 1.000)
-  "PureNorth vs Hybrid2": y = 2.139. Hybrids have 114% higher odds of survival than pure central juveniles (Pg = 1.000)
-  
-  "Palms vs Davies": y = 1.122. Palms has 12% higher odds of survival than Davies (Pl = 0.955)
-  
-  "PureCentral vs PureNorth": y = 2.621. Hybrids have 162% higher odds of survival than pure central juveniles (Pg = 1.000)
-  "PureCentral vs PureNorth2": y = 1.860. Hybrids have 86% higher odds of survival than pure central juveniles (Pg = 1.000)
-
-  "MARmom vs MARdad": y = 2.495. MARdad have a 150% higher odds of survival than MARmom juveniles (Pg = 1.000)
 
 #Plot
 get variables
@@ -412,28 +398,39 @@ NorthxNorth
 
 ```{r}
 cmat=cbind(
-  "Central vs North" = c(-1, 0, 1),
-  "Central vs Hybrid" = c(-1, 1, 0),
-  "North vs Hybrid" = c(0, 1, -1)
+  "Central vs Hybrid" = c(1, -1, 0),
+  "Central vs North" = c(1, 0, -1),
+  "North vs Hybrid" = c(0, -1, 1)
 )
 ```
 
 ```{r}
-survival.em<- survival.brm3 |>
-  emmeans(~RegionCross, type = 'response') |>
-  contrast(method=list(cmat)) |>
+survival.em <- survival.brm3 |>
+  emmeans(~RegionCross) |>  # default is on link (log-odds) scale
+  contrast(method = list(cmat)) |>
   gather_emmeans_draws() |>
-  mutate(across(everything(), exp)) |>
-#on odds ratio scale
-  dplyr::summarise(median_hdci(.value),
-            Pl = mean(.value < 1),
-            Pg = mean(.value > 1)
-            )
+  mutate(or = exp(.value)) |>  # this gives odds ratios
+  dplyr::summarise(
+    median_hdci(or),
+    Pl = mean(or < 1),
+    Pg = mean(or > 1)
+  )
 survival.em
 ```
-"Central vs Hybrid": y = 1.38. Hybrid has 138% higher odds of survival than pure juveniles (Pg = 1.000)
-"Central vs North": y = 0.660. Hybrid has 66% higher odds of survival than pure juveniles (Pg = 1.000)
-"North vs Hybrid": y = 0.721. Hybrid has 72% higher odds of survival than pure juveniles (Pg = 0.997)
+
+```{r}
+#Central vs Hybrid:
+1/0.2501097
+# = 3.998246. meaning ~4× the survival odds of Central OR 300% higher odds of survival
+
+#Central vs North:
+1/0.5184792
+# = 1.928718. meaning ~1.9× the survival odds of Central OR 46% higher odds of survival
+
+#North vs Hybrid:
+1/0.4844413
+# = 2.064234. meaning ~2× the survival odds of Central OR 100% higher odds of survival
+```
 
 #Plot
 get variables
