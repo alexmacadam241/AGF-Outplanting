@@ -203,7 +203,13 @@ Tradeoffs<- Tradeoffs |> dplyr::select(RegionCross, popcross, surv_mean, surv_se
 Tradeoffs<- Tradeoffs |> mutate(surv_mean = surv_mean *100)
 Tradeoffs<- Tradeoffs |> mutate(surv_se = surv_se *100)
 
-# plot fig6 scatterplot
+#R2 and p values
+model <- lm(growth_mean ~ surv_mean, data = Tradeoffs)
+summary(model)
+r2 <- summary(model)$r.squared
+pval <- summary(model)$coefficients[2,4]
+
+# plot fig3 scatterplot
 plot_tradeoffs<- ggplot(Tradeoffs, aes(x=surv_mean, y=growth_mean))+
   #geom_hline(yintercept = 0)+
   #geom_hline(data=filter(Tradeoffs, Family=='DRxDR'), aes(yintercept=Mean), lty='dashed', color='gray')+
@@ -211,7 +217,7 @@ plot_tradeoffs<- ggplot(Tradeoffs, aes(x=surv_mean, y=growth_mean))+
   geom_errorbar(aes(ymin=growth_mean-growth_se, ymax=growth_mean+growth_se, color=RegionCross), size=0.5)+
   geom_errorbarh(aes(xmin=surv_mean-surv_se, xmax=surv_mean+surv_se, color=RegionCross), size=0.5)+
   geom_point(aes(color=RegionCross), size=2)+
-  #geom_smooth(aes(x=surv_mean, y=growth_mean), method=lm, se=FALSE, colour = "black") +
+  geom_smooth(aes(x=surv_mean, y=growth_mean), method=lm, se=FALSE, colour = "black") +
   #theme_Publication()+
   theme_classic()+
   ggrepel::geom_text_repel(aes(label=popcross, color=RegionCross), size=3)+
@@ -319,4 +325,57 @@ var2<- var(PIxPI_gro$Growth)
 
 t_result <- t.test(DAxMA_gro$Growth, PIxPI_gro$Growth, var.equal = F)
 se_diff <- t_result$stderr
+```
+
+#######
+```{r}
+surv_sum <- summarySE(survival, measurevar="Survival",
+                     groupvars=c("RegionCross", "Rack"), na.rm=TRUE)
+```
+
+```{r}
+growth_sum <- summarySE(growth, measurevar="Growth",
+                     groupvars=c("RegionCross", "Rack"), na.rm=TRUE)
+```
+
+```{r}
+surv_sum<- surv_sum |>
+  dplyr::rename(surv_mean = mean) |>
+  dplyr::rename(surv_se = se)
+
+growth_sum<- growth_sum |>
+  dplyr::rename(growth_mean = mean) |>
+  dplyr::rename(growth_se = se)
+
+Tradeoffs<- left_join(surv_sum, growth_sum, by=c('RegionCross','Rack'))
+  
+Tradeoffs<- Tradeoffs |> dplyr::select(RegionCross, Rack, surv_mean, surv_se, growth_mean, growth_se)
+
+Tradeoffs<- Tradeoffs |> mutate(surv_mean = surv_mean *100)
+Tradeoffs<- Tradeoffs |> mutate(surv_se = surv_se *100)
+
+#R2 and p values
+model <- lm(growth_mean ~ surv_mean, data = Tradeoffs)
+summary(model)
+r2 <- summary(model)$r.squared
+pval <- summary(model)$coefficients[2,4]
+
+# plot fig3 scatterplot
+plot_tradeoffs<- ggplot(Tradeoffs, aes(x=surv_mean, y=growth_mean))+
+  #geom_hline(yintercept = 0)+
+  #geom_hline(data=filter(Tradeoffs, Family=='DRxDR'), aes(yintercept=Mean), lty='dashed', color='gray')+
+  #geom_vline(data=filter(Tradeoffs, Family=='DRxDR'), aes(xintercept=Surv), lty='dashed', color='gray')+
+  geom_errorbar(aes(ymin=growth_mean-growth_se, ymax=growth_mean+growth_se, color=RegionCross), size=0.5)+
+  geom_errorbarh(aes(xmin=surv_mean-surv_se, xmax=surv_mean+surv_se, color=RegionCross), size=0.5)+
+  geom_point(aes(color=RegionCross), size=2)+
+  geom_smooth(aes(x=surv_mean, y=growth_mean), method=lm, se=FALSE, colour = "black") +
+  #theme_Publication()+
+  theme_classic()+
+  ggrepel::geom_text_repel(aes(label=Rack, color=RegionCross), size=3)+
+  scale_y_continuous(limits=c(180,260), breaks=seq(180, 260, 10))+
+  scale_x_continuous(limits=c(20,100), breaks=c(seq(20,100,10)))+
+  scale_color_manual(values=c('black', 'gray50', 'goldenrod2', 'firebrick3'))+
+  labs(y = "Growth (%)", x = "Survival (%)")
+
+plot_tradeoffs
 ```
